@@ -1,2 +1,1 @@
-python -m sample_factory.launcher.run --run=swarm_rl.runs.single_quad.single_quad \
---backend=processes --max_parallel=1 --pause_between=1 --experiments_per_gpu=1 --num_gpus=1
+python -m sample_factory.launcher.run --run=swarm_rl.runs.single_quad.multi_obstacle_quad_attention --backend=processes --max_parallel=1 --pause_between=1 --experiments_per_gpu=0 --num_gpus=0

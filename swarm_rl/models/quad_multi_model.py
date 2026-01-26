@@ -158,13 +158,20 @@ class QuadMultiHeadAttentionEncoder(Encoder):
             fc_layer(fc_encoder_layer, fc_encoder_layer),
             nonlinearity(cfg)
         )
+
+        # Only create obstacle embed layer if obstacles are used and not none
         self.obstacle_obs_dim = QUADS_OBSTACLE_OBS_TYPE[cfg.quads_obstacle_obs_type]
-        self.obstacle_embed_layer = nn.Sequential(
-            fc_layer(self.obstacle_obs_dim, fc_encoder_layer),
-            nonlinearity(cfg),
-            fc_layer(fc_encoder_layer, fc_encoder_layer),
-            nonlinearity(cfg)
-        )
+        if self.use_obstacles and cfg.quads_obstacle_obs_type != 'none':
+            self.obstacle_embed_layer = nn.Sequential(
+                fc_layer(self.obstacle_obs_dim, fc_encoder_layer),
+                nonlinearity(cfg),
+                fc_layer(fc_encoder_layer, fc_encoder_layer),
+                nonlinearity(cfg)
+            )
+            self.has_obstacle_embed = True
+        else:
+            self.obstacle_embed_layer = None
+            self.has_obstacle_embed = False
 
         # Attention Layer
         self.attention_layer = MultiHeadAttention(4, cfg.rnn_size, cfg.rnn_size, cfg.rnn_size)
@@ -179,14 +186,19 @@ class QuadMultiHeadAttentionEncoder(Encoder):
         batch_size = obs.shape[0]
         obs_self = obs[:, :self.self_obs_dim]
         obs_neighbor = obs[:, self.self_obs_dim: self.self_obs_dim + self.all_neighbor_obs_dim]
-        obs_obstacle = obs[:, self.self_obs_dim + self.all_neighbor_obs_dim:]
 
         self_embed = self.self_embed_layer(obs_self)
         neighbor_embed = self.neighbor_embed_layer(obs_neighbor)
-        obstacle_embed = self.obstacle_embed_layer(obs_obstacle)
         neighbor_embed = neighbor_embed.view(batch_size, 1, -1)
-        obstacle_embed = obstacle_embed.view(batch_size, 1, -1)
-        attn_embed = torch.cat((neighbor_embed, obstacle_embed), dim=1)
+
+        # Process obstacle embeddings if enabled
+        if self.has_obstacle_embed:
+            obs_obstacle = obs[:, self.self_obs_dim + self.all_neighbor_obs_dim:]
+            obstacle_embed = self.obstacle_embed_layer(obs_obstacle)
+            obstacle_embed = obstacle_embed.view(batch_size, 1, -1)
+            attn_embed = torch.cat((neighbor_embed, obstacle_embed), dim=1)
+        else:
+            attn_embed = neighbor_embed
 
         attn_embed, attn_score = self.attention_layer(attn_embed, attn_embed, attn_embed)
         attn_embed = attn_embed.view(batch_size, -1)
@@ -232,11 +244,18 @@ class QuadSingleHeadAttentionEncoder_Sim2Real(QuadMultiHeadAttentionEncoder):
             fc_layer(self.all_neighbor_obs_dim, fc_encoder_layer),
             nonlinearity(cfg),
         )
+
+        # Only create obstacle embed layer if obstacles are used and not none
         self.obstacle_obs_dim = QUADS_OBSTACLE_OBS_TYPE[cfg.quads_obstacle_obs_type]
-        self.obstacle_embed_layer = nn.Sequential(
-            fc_layer(self.obstacle_obs_dim, fc_encoder_layer),
-            nonlinearity(cfg),
-        )
+        if self.use_obstacles and cfg.quads_obstacle_obs_type != 'none':
+            self.obstacle_embed_layer = nn.Sequential(
+                fc_layer(self.obstacle_obs_dim, fc_encoder_layer),
+                nonlinearity(cfg),
+            )
+            self.has_obstacle_embed = True
+        else:
+            self.obstacle_embed_layer = None
+            self.has_obstacle_embed = False
 
         # Attention Layer
         self.attention_layer = OneHeadAttention(cfg.rnn_size)
@@ -245,6 +264,33 @@ class QuadSingleHeadAttentionEncoder_Sim2Real(QuadMultiHeadAttentionEncoder):
         self.encoder_output_size = cfg.rnn_size
         self.feed_forward = nn.Sequential(fc_layer(3 * cfg.rnn_size, self.encoder_output_size),
                                           nn.Tanh())
+
+    def forward(self, obs_dict):
+        obs = obs_dict['obs']
+        batch_size = obs.shape[0]
+        obs_self = obs[:, :self.self_obs_dim]
+        obs_neighbor = obs[:, self.self_obs_dim: self.self_obs_dim + self.all_neighbor_obs_dim]
+
+        self_embed = self.self_embed_layer(obs_self)
+        neighbor_embed = self.neighbor_embed_layer(obs_neighbor)
+        neighbor_embed = neighbor_embed.view(batch_size, 1, -1)
+
+        # Process obstacle embeddings if enabled
+        if self.has_obstacle_embed:
+            obs_obstacle = obs[:, self.self_obs_dim + self.all_neighbor_obs_dim:]
+            obstacle_embed = self.obstacle_embed_layer(obs_obstacle)
+            obstacle_embed = obstacle_embed.view(batch_size, 1, -1)
+            attn_embed = torch.cat((neighbor_embed, obstacle_embed), dim=1)
+        else:
+            attn_embed = neighbor_embed
+
+        attn_embed, attn_score = self.attention_layer(attn_embed, attn_embed, attn_embed)
+        attn_embed = attn_embed.view(batch_size, -1)
+
+        embeddings = torch.cat((self_embed, attn_embed), dim=1)
+        out = self.feed_forward(embeddings)
+
+        return out
 
 
 class QuadMultiEncoder(Encoder):
@@ -308,7 +354,7 @@ class QuadMultiEncoder(Encoder):
 
         # Encode Obstacle Obs
         obstacle_encoder_out_size = 0
-        if self.use_obstacles:
+        if self.use_obstacles and cfg.quads_obstacle_obs_type != 'none':
             obstacle_obs_dim = QUADS_OBSTACLE_OBS_TYPE[cfg.quads_obstacle_obs_type]
             obstacle_hidden_size = cfg.quads_obst_hidden_size
             self.obstacle_encoder = nn.Sequential(
@@ -318,6 +364,8 @@ class QuadMultiEncoder(Encoder):
                 nonlinearity(cfg),
             )
             obstacle_encoder_out_size = calc_num_elements(self.obstacle_encoder, (obstacle_obs_dim,))
+        else:
+            self.obstacle_encoder = None
 
         total_encoder_out_size = self_encoder_out_size + neighbor_encoder_out_size + obstacle_encoder_out_size
 
@@ -341,7 +389,7 @@ class QuadMultiEncoder(Encoder):
             neighborhood_embedding = self.neighbor_encoder(obs_self, obs, self.all_neighbor_obs_size, batch_size)
             embeddings = torch.cat((embeddings, neighborhood_embedding), dim=1)
 
-        if self.use_obstacles:
+        if self.use_obstacles and self.obstacle_encoder is not None:
             obs_obstacles = obs[:, self.self_obs_dim + self.all_neighbor_obs_size:]
             obstacle_embeds = self.obstacle_encoder(obs_obstacles)
             embeddings = torch.cat((embeddings, obstacle_embeds), dim=1)
