@@ -44,6 +44,64 @@ def collision_detection(quad_poses, obst_poses, obst_radius, quad_radius):
 
 
 @njit
+def get_surround_sdfs_cube(quad_poses, obst_poses, quads_sdf_obs, obst_size, resolution=0.1):
+    # Shape of quads_sdf_obs: (quad_num, 9)
+
+    sdf_map = np.array([-1., -1., -1., 0., 0., 0., 1., 1., 1.])
+    sdf_map *= resolution
+
+    half_size = obst_size / 2.0
+
+    for i, q_pos in enumerate(quad_poses):
+        q_pos_x, q_pos_y = q_pos[0], q_pos[1]
+
+        for g_i, g_x in enumerate([q_pos_x - resolution, q_pos_x, q_pos_x + resolution]):
+            for g_j, g_y in enumerate([q_pos_y - resolution, q_pos_y, q_pos_y + resolution]):
+                grid_pos = np.array([g_x, g_y])
+
+                min_dist = 100.0
+                for o_pos in obst_poses:
+                    # 计算到立方体边界的距离（仅考虑X和Y平面）
+                    dx = max(0, abs(grid_pos[0] - o_pos[0]) - half_size)
+                    dy = max(0, abs(grid_pos[1] - o_pos[1]) - half_size)
+
+                    # 使用切比雪夫距离或其他适当的距离度量
+                    dist = max(dx, dy)
+
+                    if dist < min_dist:
+                        min_dist = dist
+
+                g_id = g_i * 3 + g_j
+                quads_sdf_obs[i, g_id] = min_dist
+
+    return quads_sdf_obs
+
+
+@njit
+def collision_detection_cube(quad_poses, obst_poses, obst_size, quad_radius):
+    quad_num = len(quad_poses)
+    quad_collisions = -1 * np.ones(quad_num)
+
+    half_size = obst_size / 2.0
+
+    for i, q_pos in enumerate(quad_poses):
+        for j, o_pos in enumerate(obst_poses):
+            # 检查是否在立方体内部（考虑无人机半径）
+            dx = abs(q_pos[0] - o_pos[0])
+            dy = abs(q_pos[1] - o_pos[1])
+            dz = abs(q_pos[2] - o_pos[2])
+
+            # 如果在立方体内，则发生碰撞
+            if (dx <= half_size + quad_radius and
+                dy <= half_size + quad_radius and
+                dz <= half_size + quad_radius):
+                quad_collisions[i] = j
+                break
+
+    return quad_collisions
+
+
+@njit
 def get_cell_centers(obst_area_length, obst_area_width, grid_size=1.):
     count = 0
     i_len = obst_area_length / grid_size
