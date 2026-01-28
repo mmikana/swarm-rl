@@ -57,6 +57,8 @@ def add_quadrotors_env_args(env, parser):
                    choices=['none', 'octomap'], help='Choose what kind of obs to send to encoder.')
     p.add_argument('--quads_obst_density', default=0.2, type=float, help='Obstacle density in the map')
     p.add_argument('--quads_obst_size', default=1.0, type=float, help='The radius of obstacles')
+    p.add_argument('--quads_obst_shape', default='cylinder', type=str,
+                   choices=['cylinder', 'cube'], help='Shape of obstacles: cylinder or cube')
     p.add_argument('--quads_obst_spawn_area', nargs='+', default=[6.0, 6.0], type=float,
                    help='The spawning area of obstacles')
     p.add_argument('--quads_domain_random', default=False, type=str2bool, help='Use domain randomization or not')
