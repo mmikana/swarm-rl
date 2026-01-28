@@ -298,15 +298,29 @@ class Quadrotor3DSceneMulti:
         world.build(batch)
         self.scene.batches.extend([batch])
 
-    def create_obstacles(self):
+    def create_cube_obstacles(self):
         import gym_art.quadrotor_multi.rendering3d as r3d
         for item in self.obstacles.pos_arr:
             color = OBST_COLOR_3
-            obst_height = self.room_dims[2]
-            obstacle_transform = r3d.transform_and_color(np.eye(4), color, r3d.cylinder(
-                radius=self.obstacles.size / 2.0, height=obst_height, sections=64))
+            # Create a cube instead of a cylinder
+            obstacle_transform = r3d.transform_and_color(np.eye(4), color, r3d.cube(
+                size=self.obstacles.size))
 
             self.obstacle_transforms.append(obstacle_transform)
+
+    def create_obstacles(self):
+        # Check if the obstacle shape is cube, otherwise use cylinder
+        if hasattr(self.obstacles, 'shape') and self.obstacles.shape == 'cube':
+            self.create_cube_obstacles()
+        else:
+            import gym_art.quadrotor_multi.rendering3d as r3d
+            for item in self.obstacles.pos_arr:
+                color = OBST_COLOR_3
+                obst_height = self.room_dims[2]
+                obstacle_transform = r3d.transform_and_color(np.eye(4), color, r3d.cylinder(
+                    radius=self.obstacles.size / 2.0, height=obst_height, sections=64))
+
+                self.obstacle_transforms.append(obstacle_transform)
 
     def update_obstacles(self, obstacles):
         import gym_art.quadrotor_multi.rendering3d as r3d
