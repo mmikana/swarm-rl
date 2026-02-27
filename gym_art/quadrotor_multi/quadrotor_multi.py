@@ -37,9 +37,7 @@ class QuadrotorEnvMulti(gym.Env):
                  dynamics_randomize_every, dynamics_change, dyn_sampler_1,
                  sense_noise, init_random_state,
                  # Rendering
-                 render_mode='human',
-                 # Obstacle shape
-                 obst_shape='cylinder'
+                 render_mode='human'
                  ):
         super().__init__()
 
@@ -91,7 +89,7 @@ class QuadrotorEnvMulti(gym.Env):
 
         # Reward
         self.rew_coeff = dict(
-            pos=-3., effort=0.05, action_change=0., crash=1., orient=1., yaw=0., rot=0., attitude=0., spin=0.1, vel=0.,
+            pos=1., effort=0.05, action_change=0., crash=1., orient=1., yaw=0., rot=0., attitude=0., spin=0.1, vel=0.,
             quadcol_bin=5., quadcol_bin_smooth_max=4., quadcol_bin_obst=5.
         )
         rew_coeff_orig = copy.deepcopy(self.rew_coeff)
@@ -127,7 +125,6 @@ class QuadrotorEnvMulti(gym.Env):
             self.curr_quad_col = []
             self.obst_density = obst_density
             self.obst_spawn_area = obst_spawn_area
-            self.obst_shape = obst_shape  # Store the obstacle shape
             self.num_obstacles = int(obst_density * obst_spawn_area[0] * obst_spawn_area[1])
             self.obst_map = None
             self.obst_size = obst_size
@@ -349,7 +346,7 @@ class QuadrotorEnvMulti(gym.Env):
 
         # Scenario reset
         if self.use_obstacles:
-            self.obstacles = MultiObstacles(obstacle_size=self.obst_size, quad_radius=self.quad_arm, shape=self.obst_shape)
+            self.obstacles = MultiObstacles(obstacle_size=self.obst_size, quad_radius=self.quad_arm)
             self.obst_map, obst_pos_arr, cell_centers = self.obst_generation_given_density()
             self.scenario.reset(obst_map=self.obst_map, cell_centers=cell_centers)
         else:

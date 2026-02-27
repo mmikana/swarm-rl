@@ -675,65 +675,6 @@ def sphere(radius, facets, facet_range=None):
     collider = SphereCollision(radius)
     return TriStrip(v, n, collider=collider)
 
-# cube centered on origin
-def cube(size):
-    half_size = size / 2.0
-    # Define vertices for a cube
-    v = np.array([
-        # Front face
-        [-half_size, -half_size, half_size], [half_size, -half_size, half_size], [-half_size, half_size, half_size],
-        [half_size, -half_size, half_size], [half_size, half_size, half_size], [-half_size, half_size, half_size],
-
-        # Back face
-        [-half_size, -half_size, -half_size], [-half_size, half_size, -half_size], [half_size, -half_size, -half_size],
-        [half_size, -half_size, -half_size], [-half_size, half_size, -half_size], [half_size, half_size, -half_size],
-
-        # Left face
-        [-half_size, -half_size, -half_size], [-half_size, -half_size, half_size], [-half_size, half_size, -half_size],
-        [-half_size, half_size, -half_size], [-half_size, -half_size, half_size], [-half_size, half_size, half_size],
-
-        # Right face
-        [half_size, -half_size, -half_size], [half_size, half_size, -half_size], [half_size, -half_size, half_size],
-        [half_size, -half_size, half_size], [half_size, half_size, -half_size], [half_size, half_size, half_size],
-
-        # Top face
-        [-half_size, half_size, -half_size], [-half_size, half_size, half_size], [half_size, half_size, -half_size],
-        [half_size, half_size, -half_size], [-half_size, half_size, half_size], [half_size, half_size, half_size],
-
-        # Bottom face
-        [-half_size, -half_size, -half_size], [half_size, -half_size, -half_size], [-half_size, -half_size, half_size],
-        [half_size, -half_size, -half_size], [half_size, -half_size, half_size], [-half_size, -half_size, half_size],
-    ])
-
-    # Define normals for each face
-    n = np.array([
-        # Front face (facing +Z)
-        [0, 0, 1], [0, 0, 1], [0, 0, 1],
-        [0, 0, 1], [0, 0, 1], [0, 0, 1],
-
-        # Back face (facing -Z)
-        [0, 0, -1], [0, 0, -1], [0, 0, -1],
-        [0, 0, -1], [0, 0, -1], [0, 0, -1],
-
-        # Left face (facing -X)
-        [-1, 0, 0], [-1, 0, 0], [-1, 0, 0],
-        [-1, 0, 0], [-1, 0, 0], [-1, 0, 0],
-
-        # Right face (facing +X)
-        [1, 0, 0], [1, 0, 0], [1, 0, 0],
-        [1, 0, 0], [1, 0, 0], [1, 0, 0],
-
-        # Top face (facing +Y)
-        [0, 1, 0], [0, 1, 0], [0, 1, 0],
-        [0, 1, 0], [0, 1, 0], [0, 1, 0],
-
-        # Bottom face (facing -Y)
-        [0, -1, 0], [0, -1, 0], [0, -1, 0],
-        [0, -1, 0], [0, -1, 0], [0, -1, 0],
-    ])
-
-    return TriStrip(v, n)
-
 # square in xy plane centered on origin
 # dim: (w, h)
 # srange, trange: desired min/max (s, t) tex coords

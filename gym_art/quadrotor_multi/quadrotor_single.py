@@ -35,8 +35,7 @@ def compute_reward_weighted(dynamics, goal, action, dt, time_remain, rew_coeff, 
     # Distance to the goal
     dist = np.linalg.norm(goal - dynamics.pos)
     cost_pos_raw = dist
-    # cost_pos = rew_coeff["pos"] * cost_pos_raw
-    cost_pos =  - 3 * np.exp(- 0.2 * dist)
+    cost_pos = rew_coeff["pos"] * cost_pos_raw
 
     # Penalize amount of control effort
     cost_effort_raw = np.linalg.norm(action)
@@ -47,20 +46,17 @@ def compute_reward_weighted(dynamics, goal, action, dt, time_remain, rew_coeff, 
         cost_orient_raw = 1.0
     else:
         cost_orient_raw = -dynamics.rot[2, 2]
-    
-    # cost_orient = rew_coeff["orient"] * cost_orient_raw
-    cost_orient = - np.exp(- 5.0 * np.abs(-cost_orient_raw-1))
+
+    cost_orient = rew_coeff["orient"] * cost_orient_raw
 
     # Loss for constant uncontrolled rotation around vertical axis
     cost_spin_raw = (dynamics.omega[0] ** 2 + dynamics.omega[1] ** 2 + dynamics.omega[2] ** 2) ** 0.5
-    # cost_spin = rew_coeff["spin"] * cost_spin_raw
-    cost_spin = - np.exp(- cost_spin_raw)
+    cost_spin = rew_coeff["spin"] * cost_spin_raw
 
     # Loss crash for staying on the floor
     cost_crash_raw = float(on_floor)
     cost_crash = rew_coeff["crash"] * cost_crash_raw
 
-    # print("pos: %.3f, orient: %.3f, spin: %.3f, effort: %.3f" % (cost_pos, cost_orient, cost_spin, cost_effort))
     reward = -dt * np.sum([
         cost_pos,
         cost_effort,
@@ -84,8 +80,6 @@ def compute_reward_weighted(dynamics, goal, action, dt, time_remain, rew_coeff, 
         "rewraw_orient": -cost_orient_raw,
         "rewraw_spin": -cost_spin_raw,
     }
-
-    print("Reward components: ", rew_info)
 
     for k, v in rew_info.items():
         rew_info[k] = dt * v

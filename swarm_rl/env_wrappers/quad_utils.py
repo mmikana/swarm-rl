@@ -31,17 +31,7 @@ def make_quadrotor_env_multi(cfg, render_mode=None, **kwargs):
     dynamics_change = dict(noise=dict(thrust_noise_ratio=0.05), damp=dict(vel=0, omega_quadratic=0))
 
     rew_coeff = DEFAULT_QUAD_REWARD_SHAPING['quad_rewards']
-
-    # Check if we're using V_ValueMapWrapper which is incompatible with experience replay
     use_replay_buffer = cfg.replay_buffer_sample_prob > 0.0
-    if cfg.visualize_v_value and use_replay_buffer:
-        print("Warning: Disabling experience replay when using V_ValueMapWrapper due to pickling issues.")
-        # Temporarily disable replay buffer when using V_ValueMapWrapper
-        original_replay_prob = cfg.replay_buffer_sample_prob
-        cfg.replay_buffer_sample_prob = 0.0
-        use_replay_buffer = False
-    else:
-        original_replay_prob = None
 
     env = QuadrotorEnvMulti(
         num_agents=cfg.quads_num_agents, ep_time=cfg.quads_episode_duration, rew_coeff=rew_coeff,
@@ -52,7 +42,7 @@ def make_quadrotor_env_multi(cfg, render_mode=None, **kwargs):
         collision_falloff_radius=cfg.quads_collision_falloff_radius,
         # Obstacle
         use_obstacles=cfg.quads_use_obstacles, obst_density=cfg.quads_obst_density, obst_size=cfg.quads_obst_size,
-        obst_spawn_area=cfg.quads_obst_spawn_area, obst_shape=cfg.quads_obst_shape,
+        obst_spawn_area=cfg.quads_obst_spawn_area,
 
         # Aerodynamics
         use_downwash=cfg.quads_use_downwash,
@@ -103,7 +93,6 @@ def make_quadrotor_env_multi(cfg, render_mode=None, **kwargs):
                                     with_pbt=cfg.with_pbt)
     env = QuadEnvCompatibility(env)
 
-    # Apply V_ValueMapWrapper after all other wrappers, but only if not using experience replay
     if cfg.visualize_v_value:
         actor_critic = create_actor_critic(cfg, env.observation_space, env.action_space)
         actor_critic.eval()
@@ -117,10 +106,6 @@ def make_quadrotor_env_multi(cfg, render_mode=None, **kwargs):
         checkpoint_dict = Learner.load_checkpoint(checkpoints, device)
         actor_critic.load_state_dict(checkpoint_dict["model"])
         env = V_ValueMapWrapper(env, actor_critic)
-
-    # Restore original replay buffer probability if it was temporarily disabled
-    if original_replay_prob is not None:
-        cfg.replay_buffer_sample_prob = original_replay_prob
 
     return env
 
