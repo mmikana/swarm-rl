@@ -1,0 +1,366 @@
+diff --git a/gym_art/quadrotor_multi/quadrotor_multi.py b/gym_art/quadrotor_multi/quadrotor_multi.py
+index 3d0e760..2db4a58 100644
+--- a/gym_art/quadrotor_multi/quadrotor_multi.py
++++ b/gym_art/quadrotor_multi/quadrotor_multi.py
+@@ -89,7 +89,7 @@ class QuadrotorEnvMulti(gym.Env):
+ 
+         # Reward
+         self.rew_coeff = dict(
+-            pos=1., effort=0.05, action_change=0., crash=1., orient=1., yaw=0., rot=0., attitude=0., spin=0.1, vel=0.,
++            pos=-3., effort=0.05, action_change=0., crash=1., orient=1., yaw=0., rot=0., attitude=0., spin=0.1, vel=0.,
+             quadcol_bin=5., quadcol_bin_smooth_max=4., quadcol_bin_obst=5.
+         )
+         rew_coeff_orig = copy.deepcopy(self.rew_coeff)
+diff --git a/gym_art/quadrotor_multi/quadrotor_single.py b/gym_art/quadrotor_multi/quadrotor_single.py
+index 0e9675e..c51aeed 100644
+--- a/gym_art/quadrotor_multi/quadrotor_single.py
++++ b/gym_art/quadrotor_multi/quadrotor_single.py
+@@ -35,19 +35,22 @@ def compute_reward_weighted(dynamics, goal, action, dt, time_remain, rew_coeff,
+     # Distance to the goal
+     dist = np.linalg.norm(goal - dynamics.pos)
+     cost_pos_raw = dist
+-    cost_pos = rew_coeff["pos"] * cost_pos_raw
++    # cost_pos = rew_coeff["pos"] * cost_pos_raw
++    cost_pos =  rew_coeff["pos"] * np.exp(- 0.2 * dist)
+ 
+     # Penalize amount of control effort
+     cost_effort_raw = np.linalg.norm(action)
+     cost_effort = rew_coeff["effort"] * cost_effort_raw
+ 
++
+     # Loss orientation
+     if on_floor:
+         cost_orient_raw = 1.0
+     else:
+         cost_orient_raw = -dynamics.rot[2, 2]
+ 
+-    cost_orient = rew_coeff["orient"] * cost_orient_raw
++    # cost_orient = rew_coeff["orient"] * cost_orient_raw
++    cost_orient = 0
+ 
+     # Loss for constant uncontrolled rotation around vertical axis
+     cost_spin_raw = (dynamics.omega[0] ** 2 + dynamics.omega[1] ** 2 + dynamics.omega[2] ** 2) ** 0.5
+diff --git a/swarm_rl/env_wrappers/quad_utils.py b/swarm_rl/env_wrappers/quad_utils.py
+index 5cb6310..9ae859b 100644
+--- a/swarm_rl/env_wrappers/quad_utils.py
++++ b/swarm_rl/env_wrappers/quad_utils.py
+@@ -31,7 +31,17 @@ def make_quadrotor_env_multi(cfg, render_mode=None, **kwargs):
+     dynamics_change = dict(noise=dict(thrust_noise_ratio=0.05), damp=dict(vel=0, omega_quadratic=0))
+ 
+     rew_coeff = DEFAULT_QUAD_REWARD_SHAPING['quad_rewards']
++
++    # Check if we're using V_ValueMapWrapper which is incompatible with experience replay
+     use_replay_buffer = cfg.replay_buffer_sample_prob > 0.0
++    if cfg.visualize_v_value and use_replay_buffer:
++        print("Warning: Disabling experience replay when using V_ValueMapWrapper due to pickling issues.")
++        # Temporarily disable replay buffer when using V_ValueMapWrapper
++        original_replay_prob = cfg.replay_buffer_sample_prob
++        cfg.replay_buffer_sample_prob = 0.0
++        use_replay_buffer = False
++    else:
++        original_replay_prob = None
+ 
+     env = QuadrotorEnvMulti(
+         num_agents=cfg.quads_num_agents, ep_time=cfg.quads_episode_duration, rew_coeff=rew_coeff,
+@@ -93,6 +103,7 @@ def make_quadrotor_env_multi(cfg, render_mode=None, **kwargs):
+                                     with_pbt=cfg.with_pbt)
+     env = QuadEnvCompatibility(env)
+ 
++    # Apply V_ValueMapWrapper after all other wrappers, but only if not using experience replay
+     if cfg.visualize_v_value:
+         actor_critic = create_actor_critic(cfg, env.observation_space, env.action_space)
+         actor_critic.eval()
+@@ -107,6 +118,10 @@ def make_quadrotor_env_multi(cfg, render_mode=None, **kwargs):
+         actor_critic.load_state_dict(checkpoint_dict["model"])
+         env = V_ValueMapWrapper(env, actor_critic)
+ 
++    # Restore original replay buffer probability if it was temporarily disabled
++    if original_replay_prob is not None:
++        cfg.replay_buffer_sample_prob = original_replay_prob
++
+     return env
+ 
+ 
+diff --git a/swarm_rl/env_wrappers/reward_shaping.py b/swarm_rl/env_wrappers/reward_shaping.py
+index 535bd47..76ceb8a 100644
+--- a/swarm_rl/env_wrappers/reward_shaping.py
++++ b/swarm_rl/env_wrappers/reward_shaping.py
+@@ -6,7 +6,7 @@ from sample_factory.envs.env_utils import TrainingInfoInterface, RewardShapingIn
+ 
+ DEFAULT_QUAD_REWARD_SHAPING_SINGLE = dict(
+     quad_rewards=dict(
+-        pos=1.0, effort=0.05, spin=0.1, vel=0.0, crash=1.0, orient=1.0, yaw=0.0
++        pos=-5.0, effort=0.05, spin=0.1, vel=0.0, crash=1.0, orient=1.0, yaw=0.0
+     ),
+ )
+ 
+diff --git a/swarm_rl/env_wrappers/v_value_map.py b/swarm_rl/env_wrappers/v_value_map.py
+index f575743..12d1fef 100644
+--- a/swarm_rl/env_wrappers/v_value_map.py
++++ b/swarm_rl/env_wrappers/v_value_map.py
+@@ -15,6 +15,21 @@ class V_ValueMapWrapper(gym.Wrapper):
+         self.curr_obs = None
+         self.model = model
+ 
++    def __getstate__(self):
++        # Exclude the model from pickling since it contains unpickleable objects
++        state = self.__dict__.copy()
++        state['_has_model'] = self.model is not None
++        if '_has_model':
++            del state['model']
++        return state
++
++    def __setstate__(self, state):
++        # Restore the state without the model
++        has_model = state.pop('_has_model', False)
++        self.__dict__.update(state)
++        # The model needs to be restored separately after unpickling
++        self.model = None
++
+     def reset(self, **kwargs):
+         obs, info = self.env.reset()
+         self.curr_obs = obs
+@@ -26,23 +41,53 @@ class V_ValueMapWrapper(gym.Wrapper):
+         return obs, reward, info, terminated, truncated
+ 
+     def render(self):
+-        if self._render_mode == 'rgb_array':
+-            frame = self.env.render()
+-            if frame is not None:
+-                width, height = frame.shape[0], frame.shape[1]
++        # Check if we should render the V-value map
++        if self._render_mode == 'rgb_array' and self.model is not None:
++            # Render the environment first
++            frame = self.env.render(mode='rgb_array')  # Explicitly request rgb_array mode
++            if frame is not None and len(frame.shape) >= 3:  # Ensure frame is valid
++                # Get the V-value map
++                height, width = frame.shape[0], frame.shape[1]
+                 v_value_map_2d = self.get_v_value_map_2d(width=width, height=height)
+-                frame = np.concatenate((frame, v_value_map_2d), axis=1)
+-            return frame
++
++                # Ensure both frames have the same height before concatenating
++                if v_value_map_2d.shape[0] != frame.shape[0]:
++                    # Resize v_value_map_2d to match frame height
++                    import cv2
++                    v_value_map_2d = cv2.resize(v_value_map_2d, (v_value_map_2d.shape[1], frame.shape[0]))
++
++                # Concatenate the environment frame with the V-value map
++                combined_frame = np.concatenate((frame, v_value_map_2d), axis=1)
++                return combined_frame
++            else:
++                # If environment frame is invalid, just return the V-value map
++                v_value_map_2d = self.get_v_value_map_2d()
++                return v_value_map_2d
+         else:
++            # If not in rgb_array mode or model is not available, just render the environment
+             return self.env.render()
+ 
+     def get_v_value_map_2d(self, width=None, height=None):
++        if self.model is None:
++            # Return empty frame if model is not available
++            w = width if width else 400
++            h = height if height else 400
++            return np.zeros((h, w, 3), dtype=np.uint8)
++
+         tmp_score = []
+         idx = []
+         idy = []
+         rnn_states = None
+         obs = dict(obs=np.array(self.curr_obs))
+         normalized_obs = prepare_and_normalize_obs(self.model, obs)
++
++        # Check if normalized_obs has the right shape
++        if normalized_obs['obs'].ndim < 2 or normalized_obs['obs'].shape[0] == 0:
++            # Return empty frame if obs is invalid
++            w = width if width else 400
++            h = height if height else 400
++            return np.zeros((h, w, 3), dtype=np.uint8)
++
+         init_x, init_y = copy.deepcopy(normalized_obs['obs'][0][0]), copy.deepcopy(normalized_obs['obs'][0][1])
+         for i in range(-10, 11):
+             ti_score = []
+diff --git a/swarm_rl/models/quad_multi_model.py b/swarm_rl/models/quad_multi_model.py
+index e7b5231..8df3cd3 100644
+--- a/swarm_rl/models/quad_multi_model.py
++++ b/swarm_rl/models/quad_multi_model.py
+@@ -158,13 +158,20 @@ class QuadMultiHeadAttentionEncoder(Encoder):
+             fc_layer(fc_encoder_layer, fc_encoder_layer),
+             nonlinearity(cfg)
+         )
++
++        # Only create obstacle embed layer if obstacles are used and not none
+         self.obstacle_obs_dim = QUADS_OBSTACLE_OBS_TYPE[cfg.quads_obstacle_obs_type]
+-        self.obstacle_embed_layer = nn.Sequential(
+-            fc_layer(self.obstacle_obs_dim, fc_encoder_layer),
+-            nonlinearity(cfg),
+-            fc_layer(fc_encoder_layer, fc_encoder_layer),
+-            nonlinearity(cfg)
+-        )
++        if self.use_obstacles and cfg.quads_obstacle_obs_type != 'none':
++            self.obstacle_embed_layer = nn.Sequential(
++                fc_layer(self.obstacle_obs_dim, fc_encoder_layer),
++                nonlinearity(cfg),
++                fc_layer(fc_encoder_layer, fc_encoder_layer),
++                nonlinearity(cfg)
++            )
++            self.has_obstacle_embed = True
++        else:
++            self.obstacle_embed_layer = None
++            self.has_obstacle_embed = False
+ 
+         # Attention Layer
+         self.attention_layer = MultiHeadAttention(4, cfg.rnn_size, cfg.rnn_size, cfg.rnn_size)
+@@ -179,14 +186,19 @@ class QuadMultiHeadAttentionEncoder(Encoder):
+         batch_size = obs.shape[0]
+         obs_self = obs[:, :self.self_obs_dim]
+         obs_neighbor = obs[:, self.self_obs_dim: self.self_obs_dim + self.all_neighbor_obs_dim]
+-        obs_obstacle = obs[:, self.self_obs_dim + self.all_neighbor_obs_dim:]
+ 
+         self_embed = self.self_embed_layer(obs_self)
+         neighbor_embed = self.neighbor_embed_layer(obs_neighbor)
+-        obstacle_embed = self.obstacle_embed_layer(obs_obstacle)
+         neighbor_embed = neighbor_embed.view(batch_size, 1, -1)
+-        obstacle_embed = obstacle_embed.view(batch_size, 1, -1)
+-        attn_embed = torch.cat((neighbor_embed, obstacle_embed), dim=1)
++
++        # Process obstacle embeddings if enabled
++        if self.has_obstacle_embed:
++            obs_obstacle = obs[:, self.self_obs_dim + self.all_neighbor_obs_dim:]
++            obstacle_embed = self.obstacle_embed_layer(obs_obstacle)
++            obstacle_embed = obstacle_embed.view(batch_size, 1, -1)
++            attn_embed = torch.cat((neighbor_embed, obstacle_embed), dim=1)
++        else:
++            attn_embed = neighbor_embed
+ 
+         attn_embed, attn_score = self.attention_layer(attn_embed, attn_embed, attn_embed)
+         attn_embed = attn_embed.view(batch_size, -1)
+@@ -232,11 +244,18 @@ class QuadSingleHeadAttentionEncoder_Sim2Real(QuadMultiHeadAttentionEncoder):
+             fc_layer(self.all_neighbor_obs_dim, fc_encoder_layer),
+             nonlinearity(cfg),
+         )
++
++        # Only create obstacle embed layer if obstacles are used and not none
+         self.obstacle_obs_dim = QUADS_OBSTACLE_OBS_TYPE[cfg.quads_obstacle_obs_type]
+-        self.obstacle_embed_layer = nn.Sequential(
+-            fc_layer(self.obstacle_obs_dim, fc_encoder_layer),
+-            nonlinearity(cfg),
+-        )
++        if self.use_obstacles and cfg.quads_obstacle_obs_type != 'none':
++            self.obstacle_embed_layer = nn.Sequential(
++                fc_layer(self.obstacle_obs_dim, fc_encoder_layer),
++                nonlinearity(cfg),
++            )
++            self.has_obstacle_embed = True
++        else:
++            self.obstacle_embed_layer = None
++            self.has_obstacle_embed = False
+ 
+         # Attention Layer
+         self.attention_layer = OneHeadAttention(cfg.rnn_size)
+@@ -246,6 +265,33 @@ class QuadSingleHeadAttentionEncoder_Sim2Real(QuadMultiHeadAttentionEncoder):
+         self.feed_forward = nn.Sequential(fc_layer(3 * cfg.rnn_size, self.encoder_output_size),
+                                           nn.Tanh())
+ 
++    def forward(self, obs_dict):
++        obs = obs_dict['obs']
++        batch_size = obs.shape[0]
++        obs_self = obs[:, :self.self_obs_dim]
++        obs_neighbor = obs[:, self.self_obs_dim: self.self_obs_dim + self.all_neighbor_obs_dim]
++
++        self_embed = self.self_embed_layer(obs_self)
++        neighbor_embed = self.neighbor_embed_layer(obs_neighbor)
++        neighbor_embed = neighbor_embed.view(batch_size, 1, -1)
++
++        # Process obstacle embeddings if enabled
++        if self.has_obstacle_embed:
++            obs_obstacle = obs[:, self.self_obs_dim + self.all_neighbor_obs_dim:]
++            obstacle_embed = self.obstacle_embed_layer(obs_obstacle)
++            obstacle_embed = obstacle_embed.view(batch_size, 1, -1)
++            attn_embed = torch.cat((neighbor_embed, obstacle_embed), dim=1)
++        else:
++            attn_embed = neighbor_embed
++
++        attn_embed, attn_score = self.attention_layer(attn_embed, attn_embed, attn_embed)
++        attn_embed = attn_embed.view(batch_size, -1)
++
++        embeddings = torch.cat((self_embed, attn_embed), dim=1)
++        out = self.feed_forward(embeddings)
++
++        return out
++
+ 
+ class QuadMultiEncoder(Encoder):
+     # Mean embedding encoder based on the DeepRL for Swarms Paper
+@@ -308,7 +354,7 @@ class QuadMultiEncoder(Encoder):
+ 
+         # Encode Obstacle Obs
+         obstacle_encoder_out_size = 0
+-        if self.use_obstacles:
++        if self.use_obstacles and cfg.quads_obstacle_obs_type != 'none':
+             obstacle_obs_dim = QUADS_OBSTACLE_OBS_TYPE[cfg.quads_obstacle_obs_type]
+             obstacle_hidden_size = cfg.quads_obst_hidden_size
+             self.obstacle_encoder = nn.Sequential(
+@@ -318,6 +364,8 @@ class QuadMultiEncoder(Encoder):
+                 nonlinearity(cfg),
+             )
+             obstacle_encoder_out_size = calc_num_elements(self.obstacle_encoder, (obstacle_obs_dim,))
++        else:
++            self.obstacle_encoder = None
+ 
+         total_encoder_out_size = self_encoder_out_size + neighbor_encoder_out_size + obstacle_encoder_out_size
+ 
+@@ -341,7 +389,7 @@ class QuadMultiEncoder(Encoder):
+             neighborhood_embedding = self.neighbor_encoder(obs_self, obs, self.all_neighbor_obs_size, batch_size)
+             embeddings = torch.cat((embeddings, neighborhood_embedding), dim=1)
+ 
+-        if self.use_obstacles:
++        if self.use_obstacles and self.obstacle_encoder is not None:
+             obs_obstacles = obs[:, self.self_obs_dim + self.all_neighbor_obs_size:]
+             obstacle_embeds = self.obstacle_encoder(obs_obstacles)
+             embeddings = torch.cat((embeddings, obstacle_embeds), dim=1)
+diff --git a/swarm_rl/runs/quad_multi_mix_baseline.py b/swarm_rl/runs/quad_multi_mix_baseline.py
+index ced35b9..becf6b0 100644
+--- a/swarm_rl/runs/quad_multi_mix_baseline.py
++++ b/swarm_rl/runs/quad_multi_mix_baseline.py
+@@ -5,8 +5,8 @@ _params = ParamGrid([
+ ])
+ 
+ QUAD_BASELINE_CLI_8 = (
+-    'python -m swarm_rl.train --env=quadrotor_multi --train_for_env_steps=1000000000 --algo=APPO --use_rnn=False '
+-    '--num_workers=36 --num_envs_per_worker=4 --learning_rate=0.0001 --ppo_clip_value=5.0 --recurrence=1 '
++    'python -m swarm_rl.train --env=quadrotor_multi --device=cpu --train_for_env_steps=1000000000 --algo=APPO --use_rnn=False '
++    '--num_workers=1 --num_envs_per_worker=2 --learning_rate=0.0001 --ppo_clip_value=5.0 --recurrence=1 '
+     '--nonlinearity=tanh --actor_critic_share_weights=False --policy_initialization=xavier_uniform '
+     '--adaptive_stddev=False --with_vtrace=False --max_policy_lag=100000000 --rnn_size=256 --with_pbt=False '
+     '--gae_lambda=1.00 --max_grad_norm=5.0 --exploration_loss_coeff=0.0 --rollout=128 --batch_size=1024 '
+diff --git a/swarm_rl/runs/single_quad/baseline.py b/swarm_rl/runs/single_quad/baseline.py
+index 362131e..d26a58e 100644
+--- a/swarm_rl/runs/single_quad/baseline.py
++++ b/swarm_rl/runs/single_quad/baseline.py
+@@ -5,12 +5,12 @@ _params = ParamGrid([
+ ])
+ 
+ QUAD_BASELINE_CLI = (
+-    'python -m swarm_rl.train --env=quadrotor_multi --train_for_env_steps=1000000000 --algo=APPO --use_rnn=False '
+-    '--num_workers=2 --num_envs_per_worker=8 --learning_rate=0.0001 --ppo_clip_value=5.0 --recurrence=1 '
++    'python -m swarm_rl.train --env=quadrotor_multi --device=cpu --train_for_env_steps=1000000000 --algo=APPO --use_rnn=false '
++    '--num_workers=12 --num_envs_per_worker=2 --learning_rate=0.0001 --ppo_clip_value=5.0 --recurrence=1 '
+     '--nonlinearity=tanh --actor_critic_share_weights=False --policy_initialization=xavier_uniform '
+     '--adaptive_stddev=False --with_vtrace=False --max_policy_lag=100000000 --rnn_size=256 --with_pbt=False '
+     '--gae_lambda=1.00 --max_grad_norm=5.0 --exploration_loss_coeff=0.0 --rollout=128 --batch_size=1024 '
+-    '--quads_use_numba=True --quads_num_agents=1 --quads_mode=static_same_goal --quads_episode_duration=15.0 '
++    '--quads_use_numba=false --quads_num_agents=1 --quads_mode=static_same_goal --quads_episode_duration=15.0 '
+     '--quads_neighbor_encoder_type=no_encoder --quads_neighbor_hidden_size=0 --quads_neighbor_obs_type=none '
+     '--quads_neighbor_visible_num=0 --replay_buffer_sample_prob=0.75 --anneal_collision_steps=300000000 '
+     '--normalize_input=False --normalize_returns=False --reward_clip=10.0 --save_milestones_sec=3600'
+diff --git a/train.sh b/train.sh
+index 52bc8c9..a3fcaa9 100644
+--- a/train.sh
++++ b/train.sh
+@@ -1,2 +1 @@
+-python -m sample_factory.launcher.run --run=swarm_rl.runs.single_quad.single_quad \
+---backend=processes --max_parallel=1 --pause_between=1 --experiments_per_gpu=1 --num_gpus=1
+\ No newline at end of file
++python -m sample_factory.launcher.run --run=swarm_rl.runs.single_quad.multi_obstacle_quad_attention --backend=processes --max_parallel=1 --pause_between=1 --experiments_per_gpu=0 --num_gpus=0
+\ No newline at end of file

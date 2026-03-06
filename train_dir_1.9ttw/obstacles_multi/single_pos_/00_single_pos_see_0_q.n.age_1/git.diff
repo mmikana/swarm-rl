@@ -1,0 +1,43 @@
+diff --git a/gym_art/quadrotor_multi/quadrotor_single.py b/gym_art/quadrotor_multi/quadrotor_single.py
+index 3bd9892..9d7d632 100644
+--- a/gym_art/quadrotor_multi/quadrotor_single.py
++++ b/gym_art/quadrotor_multi/quadrotor_single.py
+@@ -39,7 +39,8 @@ def compute_reward_weighted(dynamics, goal, action, dt, time_remain, rew_coeff,
+ 
+     # Penalize amount of control effort
+     cost_effort_raw = np.linalg.norm(action)
+-    cost_effort = rew_coeff["effort"] * cost_effort_raw
++    # cost_effort = rew_coeff["effort"] * cost_effort_raw
++    cost_effort = 0
+ 
+     # Loss orientation
+     if on_floor:
+@@ -47,11 +48,13 @@ def compute_reward_weighted(dynamics, goal, action, dt, time_remain, rew_coeff,
+     else:
+         cost_orient_raw = -dynamics.rot[2, 2]
+ 
+-    cost_orient = rew_coeff["orient"] * cost_orient_raw
++    # cost_orient = rew_coeff["orient"] * cost_orient_raw
++    cost_orient = 0
+ 
+     # Loss for constant uncontrolled rotation around vertical axis
+     cost_spin_raw = (dynamics.omega[0] ** 2 + dynamics.omega[1] ** 2 + dynamics.omega[2] ** 2) ** 0.5
+-    cost_spin = rew_coeff["spin"] * cost_spin_raw
++    # cost_spin = rew_coeff["spin"] * cost_spin_raw
++    cost_spin = 0
+ 
+     # Loss crash for staying on the floor
+     cost_crash_raw = float(on_floor)
+diff --git a/swarm_rl/runs/obstacles/quads_multi_obstacles.py b/swarm_rl/runs/obstacles/quads_multi_obstacles.py
+index d56c567..baecba3 100644
+--- a/swarm_rl/runs/obstacles/quads_multi_obstacles.py
++++ b/swarm_rl/runs/obstacles/quads_multi_obstacles.py
+@@ -15,7 +15,7 @@ OBSTACLE_MODEL_CLI = QUAD_BASELINE_CLI_8 + (
+ )
+ 
+ _experiment = Experiment(
+-    "final",
++    "single_pos",
+     OBSTACLE_MODEL_CLI,
+     _params.generate_params(randomize=False),
+ )

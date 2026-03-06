@@ -15,7 +15,7 @@ OBSTACLE_MODEL_CLI = QUAD_BASELINE_CLI_8 + (
 )
 
 _experiment = Experiment(
-    "final",
+    "single_pos",
     OBSTACLE_MODEL_CLI,
     _params.generate_params(randomize=False),
 )

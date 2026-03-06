@@ -22,7 +22,7 @@ def crazyflie_params():
     noise_params["thrust_noise_ratio"] = 0.05
 
     ## Motor parameters
-    motor_params = {"thrust_to_weight" : 1.9, #2.18
+    motor_params = {"thrust_to_weight" : 3.0, #original para is 1.9, to satisfy the RCBF condition, we use 3.0 as new ttw
                     "assymetry": [1.0, 1.0, 1.0, 1.0],
                     "torque_to_thrust": 0.006, #0.005964552
                     "linearity": 1.0, #0.424 for CrazyFlie w/o correction in firmware (See [2])
@@ -171,6 +171,7 @@ def crazyflie_lowinertia_params():
         "geom": geom_params, 
         "damp": damp_params, 
         "noise": noise_params,
+
         "motor": motor_params
     }
     # print(params)

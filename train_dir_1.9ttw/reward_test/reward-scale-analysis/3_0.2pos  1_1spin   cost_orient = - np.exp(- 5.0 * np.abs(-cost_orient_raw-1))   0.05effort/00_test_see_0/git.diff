@@ -1,0 +1,16 @@
+diff --git a/gym_art/quadrotor_multi/quadrotor_single.py b/gym_art/quadrotor_multi/quadrotor_single.py
+index ae18006..8d8f9d8 100644
+--- a/gym_art/quadrotor_multi/quadrotor_single.py
++++ b/gym_art/quadrotor_multi/quadrotor_single.py
+@@ -48,10 +48,8 @@ def compute_reward_weighted(dynamics, goal, action, dt, time_remain, rew_coeff,
+     else:
+         cost_orient_raw = -dynamics.rot[2, 2]
+     
+-    print("Orientation cost raw:", cost_orient_raw)
+     # cost_orient = rew_coeff["orient"] * cost_orient_raw
+-    cost_orient = - np.exp(- 5.0 * (cost_orient_raw-1))
+-    print("Orientation cost:", cost_orient)
++    cost_orient = - np.exp(- 5.0 * np.abs(-cost_orient_raw-1))
+ 
+     # Loss for constant uncontrolled rotation around vertical axis
+     cost_spin_raw = (dynamics.omega[0] ** 2 + dynamics.omega[1] ** 2 + dynamics.omega[2] ** 2) ** 0.5
