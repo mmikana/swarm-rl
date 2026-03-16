@@ -119,3 +119,32 @@ def add_quadrotors_env_args(env, parser):
 
     # Sim2Real
     p.add_argument('--quads_sim2real', default=False, type=str2bool, help='Whether to use sim2real or not')
+
+    # ========== CBF (Control Barrier Function) Parameters ==========
+    # CBF Toggle
+    p.add_argument('--quads_use_cbf', default=False, type=str2bool,
+                   help='Enable CBF-QP safety layer for obstacle avoidance')
+
+    # Quadrotor Physical Parameters (for CBF dynamics)
+    p.add_argument('--quads_mass', default=0.028, type=float,
+                   help='Quadrotor mass in kg (Crazyflie default: 0.028)')
+    p.add_argument('--quads_thrust_to_weight', default=3.0, type=float,
+                   help='Thrust-to-weight ratio (default: 3.0)')
+
+    # CBF Gain Parameters
+    p.add_argument('--quads_cbf_alpha_1', default=1.0, type=float,
+                   help='CBF gain parameter alpha_1 (s^-1). Larger = faster response')
+    p.add_argument('--quads_cbf_alpha_2', default=1.0, type=float,
+                   help='CBF gain parameter alpha_2 (s^-1). Larger = more conservative')
+
+    # CBF Risk Parameters
+    p.add_argument('--quads_cbf_k_omega', default=0.1, type=float,
+                   help='Angular velocity risk weight (m/rad^2). Compensates for underactuated dynamics')
+    p.add_argument('--quads_cbf_epsilon', default=0.1, type=float,
+                   help='Numerical stability constant (m/s^2)')
+
+    # Obstacle Parameters (for CBF)
+    p.add_argument('--quads_cbf_R_obs', default=0.5, type=float,
+                   help='Obstacle radius in meters (used for SDF gradient calculation)')
+    p.add_argument('--quads_cbf_sdf_resolution', default=0.1, type=float,
+                   help='SDF grid resolution in meters (default: 0.1)')

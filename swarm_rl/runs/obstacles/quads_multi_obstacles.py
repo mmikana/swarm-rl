@@ -11,11 +11,12 @@ _params = ParamGrid(
 OBSTACLE_MODEL_CLI = QUAD_BASELINE_CLI_8 + (
     '--quads_neighbor_visible_num=0 --quads_neighbor_obs_type=pos_vel --quads_encoder_type=attention '
     '--with_wandb=False --wandb_project=Quad-Swarm-RL --wandb_user=multi-drones '
-    '--wandb_group=final'
+    '--wandb_group=final '
+    '--quads_use_cbf=True'
 )
 
 _experiment = Experiment(
-    "single_pos",
+    "test_cbf",
     OBSTACLE_MODEL_CLI,
     _params.generate_params(randomize=False),
 )
