@@ -22,8 +22,9 @@ class Scenario_o_base(QuadrotorScenario):
         half_room_length = self.room_dims[0] / 2
         half_room_width = self.room_dims[1] / 2
 
-        x = np.random.uniform(low=-1.0 * half_room_length + 2.0, high=half_room_length - 2.0)
-        y = np.random.uniform(low=-1.0 * half_room_width + 2.0, high=half_room_width - 2.0)
+        # 适配狭长空间：X 轴范围大，Y 轴范围小
+        x = np.random.uniform(low=-1.0 * half_room_length + 1.0, high=half_room_length - 1.0)
+        y = np.random.uniform(low=-1.0 * half_room_width + 1.0, high=half_room_width - 1.0)
 
         z = np.random.uniform(low=1.0, high=4.0)
 
