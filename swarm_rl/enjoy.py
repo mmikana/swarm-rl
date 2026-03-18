@@ -30,13 +30,13 @@ def main():
     else:
         use_cbf = getattr(cfg, 'quads_use_cbf', False)
 
-    # IMPORTANT: CBF model inherits from ActorCriticSharedWeights
-    # Must force actor_critic_share_weights=True for checkpoint compatibility
+    # IMPORTANT: CBF支持两种架构
+    # - actor_critic_share_weights=True: 使用 QuadActorCriticWithCBF
+    # - actor_critic_share_weights=False: 使用 QuadActorCriticWithCBFSeparate
+    # 不需要强制修改 cfg.actor_critic_share_weights，让它保持checkpoint中的原始值
     if use_cbf:
-        print(f"[INFO] CBF detected, forcing actor_critic_share_weights=True")
-        print(f"[INFO] Before: actor_critic_share_weights={cfg.actor_critic_share_weights}")
-        cfg.actor_critic_share_weights = True
-        print(f"[INFO] After: actor_critic_share_weights={cfg.actor_critic_share_weights}")
+        print(f"[INFO] CBF detected with actor_critic_share_weights={cfg.actor_critic_share_weights}")
+        print(f"[INFO] Will use {'QuadActorCriticWithCBF (Shared)' if cfg.actor_critic_share_weights else 'QuadActorCriticWithCBFSeparate (Separate)'}")
 
     register_swarm_components(use_cbf=use_cbf)
 

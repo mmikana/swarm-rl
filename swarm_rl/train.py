@@ -21,12 +21,20 @@ def make_actor_critic_with_cbf(cfg, obs_space, action_space):
     """
     Custom Actor-Critic factory that uses CBF.
     This is a module-level function to support pickling for multiprocessing.
+
+    根据 cfg.actor_critic_share_weights 选择对应的CBF模型:
+    - True: QuadActorCriticWithCBF (继承 ActorCriticSharedWeights)
+    - False: QuadActorCriticWithCBFSeparate (继承 ActorCriticSeparateWeights)
     """
     from sample_factory.algo.utils.context import global_model_factory
-    from swarm_rl.models.quad_multi_model_rcbf import QuadActorCriticWithCBF
-    
+    from swarm_rl.models.quad_multi_model_rcbf import QuadActorCriticWithCBF, QuadActorCriticWithCBFSeparate
+
     model_factory = global_model_factory()
-    return QuadActorCriticWithCBF(model_factory, obs_space, action_space, cfg)
+
+    if cfg.actor_critic_share_weights:
+        return QuadActorCriticWithCBF(model_factory, obs_space, action_space, cfg)
+    else:
+        return QuadActorCriticWithCBFSeparate(model_factory, obs_space, action_space, cfg)
 
 
 def register_swarm_components(use_cbf=False):

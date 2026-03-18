@@ -172,6 +172,18 @@ class QuadCBFQPLayer(nn.Module):
         # 在方法内部导入 cvxpy（避免 pickle 问题）
         import cvxpy as cp
 
+        # 检查 A 是否接近 0（推力方向与避障方向垂直）
+        A_norm = np.linalg.norm(A)
+        if A_norm < 1e-6:
+            # 推力无法在避障方向产生加速度
+            # 如果约束不满足，直接返回最小推力（减速）
+            if b > 0:
+                # 需要减速，返回最小推力
+                return np.array([-1.0, -1.0, -1.0, -1.0])
+            else:
+                # 约束已满足，返回原始动作
+                return u_rl
+
         u = cp.Variable(4)
         slack = cp.Variable(1, nonneg=True)
 
@@ -325,9 +337,14 @@ class QuadCBFQPLayer(nn.Module):
         Returns:
             u_safe: (batch_size, 4) tensor
         """
-        if not self.qpth_available or self.qp_solver is None:
+        if not self.qpth_available:
             # 如果 qpth 不可用，返回原始动作
+            print("Warning: qpth not available, returning u_rl")
             return u_rl
+
+        # 在方法内部导入 qpth（避免 pickle 问题）
+        from qpth.qp import QPFunction
+        qp_solver = QPFunction(verbose=False, maxIter=10000, eps=1e-4)
 
         device = u_rl.device
         batch_size = u_rl.shape[0]
@@ -373,7 +390,7 @@ class QuadCBFQPLayer(nn.Module):
 
         # 3. 求解 QP
         try:
-            x = self.qp_solver(P, q, G, h, torch.Tensor().to(device), torch.Tensor().to(device))
+            x = qp_solver(P, q, G, h, torch.Tensor().to(device), torch.Tensor().to(device))
             u_safe = x[:, :n_u]
             return u_safe
         except Exception as e:
