@@ -51,13 +51,26 @@ class QuadActorCriticWithCBF(ActorCriticSharedWeights):
 
         if self.use_cbf:
             # 验证观测空间包含 SDF（9 维）
-            # obs_space 是 Dict('obs': Box(...)) 结构
-            obs_dim = obs_space.spaces['obs'].shape[0]
-            
-            if obs_dim < 9:
+            # 从cfg计算观测维度,而不是从obs_space
+            from gym_art.quadrotor_multi.quad_utils import QUADS_OBS_REPR, QUADS_NEIGHBOR_OBS_TYPE
+
+            self.self_obs_dim = QUADS_OBS_REPR[cfg.quads_obs_repr]
+            self.neighbor_obs_dim = QUADS_NEIGHBOR_OBS_TYPE[cfg.quads_neighbor_obs_type]
+
+            if cfg.quads_neighbor_visible_num == -1:
+                self.num_neighbors = cfg.quads_num_agents - 1
+            else:
+                self.num_neighbors = cfg.quads_neighbor_visible_num
+
+            self.all_neighbor_obs_dim = self.neighbor_obs_dim * self.num_neighbors
+
+            # 计算总观测维度
+            obs_dim = self.self_obs_dim + self.all_neighbor_obs_dim + 9  # +9 for SDF
+
+            if obs_dim < self.self_obs_dim + 9:
                 raise ValueError(
                     f"Observation dimension ({obs_dim}) is too small for CBF. "
-                    f"CBF requires at least 9 dimensions for SDF observations."
+                    f"CBF requires at least {self.self_obs_dim + 9} dimensions for SDF observations."
                 )
 
             # 创建 CBF-QP 层
@@ -71,18 +84,6 @@ class QuadActorCriticWithCBF(ActorCriticSharedWeights):
                 epsilon=getattr(cfg, 'quads_cbf_epsilon', 0.1),
                 sdf_resolution=getattr(cfg, 'quads_cbf_sdf_resolution', 0.1),
             )
-
-            # 观测结构信息（用于提取状态）
-            from gym_art.quadrotor_multi.quad_utils import QUADS_OBS_REPR, QUADS_NEIGHBOR_OBS_TYPE
-            self.self_obs_dim = QUADS_OBS_REPR[cfg.quads_obs_repr]
-            self.neighbor_obs_dim = QUADS_NEIGHBOR_OBS_TYPE[cfg.quads_neighbor_obs_type]
-
-            if cfg.quads_neighbor_visible_num == -1:
-                self.num_neighbors = cfg.quads_num_agents - 1
-            else:
-                self.num_neighbors = cfg.quads_neighbor_visible_num
-
-            self.all_neighbor_obs_dim = self.neighbor_obs_dim * self.num_neighbors
 
             # 验证 SDF 观测位置
             expected_sdf_start = self.self_obs_dim + self.all_neighbor_obs_dim
@@ -256,12 +257,26 @@ class QuadActorCriticWithCBFSeparate(ActorCriticSeparateWeights):
 
         if self.use_cbf:
             # 验证观测空间包含 SDF（9 维）
-            obs_dim = obs_space.spaces['obs'].shape[0]
+            # 从cfg计算观测维度,而不是从obs_space
+            from gym_art.quadrotor_multi.quad_utils import QUADS_OBS_REPR, QUADS_NEIGHBOR_OBS_TYPE
 
-            if obs_dim < 9:
+            self.self_obs_dim = QUADS_OBS_REPR[cfg.quads_obs_repr]
+            self.neighbor_obs_dim = QUADS_NEIGHBOR_OBS_TYPE[cfg.quads_neighbor_obs_type]
+
+            if cfg.quads_neighbor_visible_num == -1:
+                self.num_neighbors = cfg.quads_num_agents - 1
+            else:
+                self.num_neighbors = cfg.quads_neighbor_visible_num
+
+            self.all_neighbor_obs_dim = self.neighbor_obs_dim * self.num_neighbors
+
+            # 计算总观测维度
+            obs_dim = self.self_obs_dim + self.all_neighbor_obs_dim + 9  # +9 for SDF
+
+            if obs_dim < self.self_obs_dim + 9:
                 raise ValueError(
                     f"Observation dimension ({obs_dim}) is too small for CBF. "
-                    f"CBF requires at least 9 dimensions for SDF observations."
+                    f"CBF requires at least {self.self_obs_dim + 9} dimensions for SDF observations."
                 )
 
             # 创建 CBF-QP 层
@@ -275,18 +290,6 @@ class QuadActorCriticWithCBFSeparate(ActorCriticSeparateWeights):
                 epsilon=getattr(cfg, 'quads_cbf_epsilon', 0.1),
                 sdf_resolution=getattr(cfg, 'quads_cbf_sdf_resolution', 0.1),
             )
-
-            # 观测结构信息（用于提取状态）
-            from gym_art.quadrotor_multi.quad_utils import QUADS_OBS_REPR, QUADS_NEIGHBOR_OBS_TYPE
-            self.self_obs_dim = QUADS_OBS_REPR[cfg.quads_obs_repr]
-            self.neighbor_obs_dim = QUADS_NEIGHBOR_OBS_TYPE[cfg.quads_neighbor_obs_type]
-
-            if cfg.quads_neighbor_visible_num == -1:
-                self.num_neighbors = cfg.quads_num_agents - 1
-            else:
-                self.num_neighbors = cfg.quads_neighbor_visible_num
-
-            self.all_neighbor_obs_dim = self.neighbor_obs_dim * self.num_neighbors
 
             # 验证 SDF 观测位置
             expected_sdf_start = self.self_obs_dim + self.all_neighbor_obs_dim
