@@ -54,9 +54,7 @@ class QuadCBFQPLayer(nn.Module):
         thrust_to_weight=None,
         alpha_1=1.0,
         alpha_2=1.0,
-        k_omega=0.1,
         R_obs=0.5,
-        epsilon=0.1,
         sdf_resolution=0.1,
     ):
         super().__init__()
@@ -75,9 +73,7 @@ class QuadCBFQPLayer(nn.Module):
         # CBF 参数
         self.alpha_1 = alpha_1
         self.alpha_2 = alpha_2
-        self.k_omega = k_omega
         self.R_obs = R_obs
-        self.epsilon = epsilon
         self.delta = sdf_resolution
 
         # 注册常数为 buffer（自动跟随 device）
@@ -143,7 +139,6 @@ class QuadCBFQPLayer(nn.Module):
         """
         v = state['vel']
         R = state['rot']
-        omega = state['omega']
 
         # 1. SDF 梯度和安全距离
         n, h = self.compute_sdf_gradient(sdf_obs)
@@ -155,21 +150,17 @@ class QuadCBFQPLayer(nn.Module):
         denom = max(h + self.R_obs, 1e-6)
         n_dot_v = (np.dot(v, v) - h_dot**2) / denom
 
-        # 4. Risk 项（角速度补偿）
-        Risk = self.k_omega * np.dot(omega[:2], omega[:2]) + self.epsilon
-
-        # 5. 控制矩阵 A
+        # 4. 控制矩阵 A
         Re3 = R @ np.array([0.0, 0.0, 1.0])
         nTRe3 = np.dot(n, Re3)
         A = (self.T_max / (2 * self.m)) * nTRe3 * np.ones(4)
 
-        # 6. 约束标量 b
+        # 5. 约束标量 b
         gravity_term = np.dot(n, self.g * np.array([0.0, 0.0, 1.0]))
         bias_term = (2 * self.T_max / self.m) * nTRe3
 
         b = (
-            Risk
-            + gravity_term
+            gravity_term
             - n_dot_v
             - (self.alpha_1 + self.alpha_2) * h_dot
             - self.alpha_1 * self.alpha_2 * h
@@ -317,11 +308,7 @@ class QuadCBFQPLayer(nn.Module):
         denom = torch.clamp(h + self.R_obs, min=1e-6)
         n_dot_v = (v_squared - h_dot**2) / denom  # (batch_size,)
 
-        # 4. Risk 项（角速度补偿）
-        omega_xy_squared = torch.sum(omega[:, :2]**2, dim=1)  # (batch_size,)
-        Risk = self.k_omega * omega_xy_squared + self.epsilon  # (batch_size,)
-
-        # 5. 控制矩阵 A
+        # 4. 控制矩阵 A
         # Re3 = R @ e3, e3 = [0, 0, 1]^T
         e3 = self.e3.to(device)  # (3,)
         Re3 = torch.matmul(R, e3)  # (batch_size, 3)
@@ -331,14 +318,13 @@ class QuadCBFQPLayer(nn.Module):
         A_coeff = (self.T_max / (2 * self.m)) * nTRe3  # (batch_size,)
         A = A_coeff.unsqueeze(1).unsqueeze(2) * torch.ones(batch_size, 1, 4, device=device)  # (batch_size, 1, 4)
 
-        # 6. 约束标量 b
+        # 5. 约束标量 b
         e3_np = torch.tensor([0.0, 0.0, 1.0], device=device)
         gravity_term = torch.sum(n * (self.g * e3_np), dim=1)  # (batch_size,)
         bias_term = (2 * self.T_max / self.m) * nTRe3  # (batch_size,)
 
         b = (
-            Risk
-            + gravity_term
+            gravity_term
             - n_dot_v
             - (self.alpha_1 + self.alpha_2) * h_dot
             - self.alpha_1 * self.alpha_2 * h

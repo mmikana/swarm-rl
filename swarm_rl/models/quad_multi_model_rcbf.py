@@ -77,7 +77,6 @@ class QuadActorCriticWithCBF(ActorCriticSharedWeights):
             self.cbf_layer = QuadCBFQPLayer(
                 alpha_1=getattr(cfg, 'quads_cbf_alpha_1', 1.0),
                 alpha_2=getattr(cfg, 'quads_cbf_alpha_2', 1.0),
-                k_omega=getattr(cfg, 'quads_cbf_k_omega', 0.1),
                 R_obs=getattr(cfg, 'quads_cbf_R_obs', 0.5),
                 epsilon=getattr(cfg, 'quads_cbf_epsilon', 0.1),
                 sdf_resolution=getattr(cfg, 'quads_cbf_sdf_resolution', 0.1),
@@ -281,7 +280,6 @@ class QuadActorCriticWithCBFSeparate(ActorCriticSeparateWeights):
             self.cbf_layer = QuadCBFQPLayer(
                 alpha_1=getattr(cfg, 'quads_cbf_alpha_1', 1.0),
                 alpha_2=getattr(cfg, 'quads_cbf_alpha_2', 1.0),
-                k_omega=getattr(cfg, 'quads_cbf_k_omega', 0.1),
                 R_obs=getattr(cfg, 'quads_cbf_R_obs', 0.5),
                 epsilon=getattr(cfg, 'quads_cbf_epsilon', 0.1),
                 sdf_resolution=getattr(cfg, 'quads_cbf_sdf_resolution', 0.1),

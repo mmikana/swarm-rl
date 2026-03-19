@@ -133,12 +133,6 @@ def add_quadrotors_env_args(env, parser):
     p.add_argument('--quads_cbf_alpha_2', default=1.0, type=float,
                    help='CBF gain parameter alpha_2 (s^-1). Larger = more conservative')
 
-    # CBF Risk Parameters
-    p.add_argument('--quads_cbf_k_omega', default=0.1, type=float,
-                   help='Angular velocity risk weight (m/rad^2). Compensates for underactuated dynamics')
-    p.add_argument('--quads_cbf_epsilon', default=0.1, type=float,
-                   help='Numerical stability constant (m/s^2)')
-
     # Obstacle Parameters (for CBF)
     p.add_argument('--quads_cbf_R_obs', default=0.5, type=float,
                    help='Obstacle radius in meters (used for SDF gradient calculation)')
