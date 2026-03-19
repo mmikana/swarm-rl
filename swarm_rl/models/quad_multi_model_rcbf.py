@@ -73,10 +73,8 @@ class QuadActorCriticWithCBF(ActorCriticSharedWeights):
                     f"CBF requires at least {self.self_obs_dim + 9} dimensions for SDF observations."
                 )
 
-            # 创建 CBF-QP 层
+            # 创建 CBF-QP 层 (物理参数自动从动力学模型读取)
             self.cbf_layer = QuadCBFQPLayer(
-                mass=getattr(cfg, 'quads_mass', 0.028),
-                thrust_to_weight=getattr(cfg, 'quads_thrust_to_weight', 3.0),
                 alpha_1=getattr(cfg, 'quads_cbf_alpha_1', 1.0),
                 alpha_2=getattr(cfg, 'quads_cbf_alpha_2', 1.0),
                 k_omega=getattr(cfg, 'quads_cbf_k_omega', 0.1),
@@ -279,10 +277,8 @@ class QuadActorCriticWithCBFSeparate(ActorCriticSeparateWeights):
                     f"CBF requires at least {self.self_obs_dim + 9} dimensions for SDF observations."
                 )
 
-            # 创建 CBF-QP 层
+            # 创建 CBF-QP 层 (物理参数自动从动力学模型读取)
             self.cbf_layer = QuadCBFQPLayer(
-                mass=getattr(cfg, 'quads_mass', 0.028),
-                thrust_to_weight=getattr(cfg, 'quads_thrust_to_weight', 3.0),
                 alpha_1=getattr(cfg, 'quads_cbf_alpha_1', 1.0),
                 alpha_2=getattr(cfg, 'quads_cbf_alpha_2', 1.0),
                 k_omega=getattr(cfg, 'quads_cbf_k_omega', 0.1),

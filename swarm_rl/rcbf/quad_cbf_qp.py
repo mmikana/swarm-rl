@@ -9,6 +9,24 @@ import numpy as np
 import torch
 import torch.nn as nn
 
+# 导入动力学参数
+from gym_art.quadrotor_multi.quad_models import crazyflie_params
+from gym_art.quadrotor_multi.inertia import QuadLink
+
+
+def get_crazyflie_physics():
+    """从动力学模型获取物理参数"""
+    params = crazyflie_params()
+
+    # 计算质量 (与 QuadrotorDynamics 一致)
+    quad_model = QuadLink(params=params["geom"], verbose=False)
+    mass = quad_model.m
+
+    # 推力重量比
+    thrust_to_weight = params["motor"]["thrust_to_weight"]
+
+    return mass, thrust_to_weight
+
 
 class QuadCBFQPLayer(nn.Module):
     """
@@ -20,8 +38,8 @@ class QuadCBFQPLayer(nn.Module):
     - 支持训练（可微分）和推理（精确求解）两种模式
 
     Args:
-        mass: 无人机质量 (kg), 默认 0.028 (Crazyflie)
-        thrust_to_weight: 推力重量比, 默认 3.0
+        mass: 无人机质量 (kg), 默认从 crazyflie_params 读取
+        thrust_to_weight: 推力重量比, 默认从 crazyflie_params 读取
         alpha_1: CBF 增益参数 1 (s^-1)
         alpha_2: CBF 增益参数 2 (s^-1)
         k_omega: 角速度风险权重 (m/rad^2)
@@ -32,8 +50,8 @@ class QuadCBFQPLayer(nn.Module):
 
     def __init__(
         self,
-        mass=0.028,
-        thrust_to_weight=3.0,
+        mass=None,
+        thrust_to_weight=None,
         alpha_1=1.0,
         alpha_2=1.0,
         k_omega=0.1,
@@ -43,7 +61,13 @@ class QuadCBFQPLayer(nn.Module):
     ):
         super().__init__()
 
-        # 物理参数
+        # 物理参数: 优先使用传入值,否则从动力学模型读取
+        if mass is None or thrust_to_weight is None:
+            dyn_mass, dyn_ttw = get_crazyflie_physics()
+            mass = mass if mass is not None else dyn_mass
+            thrust_to_weight = thrust_to_weight if thrust_to_weight is not None else dyn_ttw
+            print(f"[CBF] 从动力学模型读取参数: mass={mass:.4f}kg, thrust_to_weight={thrust_to_weight:.1f}")
+
         self.m = mass
         self.g = 9.81
         self.T_max = mass * self.g * thrust_to_weight / 4.0  # 单电机最大推力

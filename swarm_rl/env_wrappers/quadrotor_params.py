@@ -125,11 +125,7 @@ def add_quadrotors_env_args(env, parser):
     p.add_argument('--quads_use_cbf', default=False, type=str2bool,
                    help='Enable CBF-QP safety layer for obstacle avoidance')
 
-    # Quadrotor Physical Parameters (for CBF dynamics)
-    p.add_argument('--quads_mass', default=0.028, type=float,
-                   help='Quadrotor mass in kg (Crazyflie default: 0.028)')
-    p.add_argument('--quads_thrust_to_weight', default=3.0, type=float,
-                   help='Thrust-to-weight ratio (default: 3.0)')
+    # Note: mass and thrust_to_weight are automatically read from dynamics model (crazyflie_params)
 
     # CBF Gain Parameters
     p.add_argument('--quads_cbf_alpha_1', default=1.0, type=float,

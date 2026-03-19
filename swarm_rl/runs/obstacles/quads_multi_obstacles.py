@@ -13,13 +13,14 @@ OBSTACLE_MODEL_CLI = QUAD_BASELINE_CLI_8 + (
     '--with_wandb=False --wandb_project=Quad-Swarm-RL --wandb_user=multi-drones '
     '--wandb_group=final '
     '--quads_cbf_k_omega=0 '
-    '--quads_use_cbf=True'
+    '--quads_use_cbf=True --quads_cbf_alpha_1=0.1  --quads_cbf_alpha_2=0.1  --quads_cbf_k_omega =0  --quads_cbf_epsilon=0.1 '
+    '--quads_cbf_R_obs=0.5'
 )
 
 _experiment = Experiment(
-    "test_cbf_kw0_share",
+    "alpha_1=0.5 alpha_2=0.5 k_w=0",
     OBSTACLE_MODEL_CLI,
     _params.generate_params(randomize=False),
 )
 
-RUN_DESCRIPTION = RunDescription("obstacles_multi", experiments=[_experiment])
+RUN_DESCRIPTION = RunDescription("obstacles_cbf", experiments=[_experiment])
