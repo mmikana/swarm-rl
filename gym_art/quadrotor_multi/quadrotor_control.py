@@ -175,20 +175,38 @@ class OmegaThrustControl(object):
     def __init__(self, dynamics):
         jacobian = quadrotor_jacobian(dynamics)
         self.Jinv = np.linalg.inv(jacobian)
+        
+        # 保存物理范围用于动作缩放
+        circle_per_sec = 2 * np.pi
+        self.max_rp = 5 * circle_per_sec
+        self.max_yaw = 1 * circle_per_sec
+        self.min_g = -1.0
+        self.max_g = dynamics.thrust_to_weight - 1.0
 
     def action_space(self, dynamics):
-        circle_per_sec = 2 * np.pi
-        max_rp = 5 * circle_per_sec
-        max_yaw = 1 * circle_per_sec
-        min_g = -1.0
-        max_g = dynamics.thrust_to_weight - 1.0
-        low = np.array([min_g, -max_rp, -max_rp, -max_yaw])
-        high = np.array([max_g, max_rp, max_rp, max_yaw])
+        # RL 动作空间固定为 [-1, 1]^4，在 step() 中缩放到物理范围
+        low = np.array([-1.0, -1.0, -1.0, -1.0])
+        high = np.array([1.0, 1.0, 1.0, 1.0])
         return spaces.Box(low, high, dtype=np.float32)
+
+    def _scale_action(self, action):
+        """将 [-1, 1] 范围的 RL 动作缩放到物理范围"""
+        # action[0]: a_thrust [-1, 1] -> [min_g, max_g]
+        # action[1:3]: omega_x, omega_y [-1, 1] -> [-max_rp, max_rp]
+        # action[3]: omega_z [-1, 1] -> [-max_yaw, max_yaw]
+        scaled = np.zeros_like(action)
+        scaled[0] = action[0] * (self.max_g - self.min_g) / 2.0 + (self.max_g + self.min_g) / 2.0
+        scaled[1] = action[1] * self.max_rp
+        scaled[2] = action[2] * self.max_rp
+        scaled[3] = action[3] * self.max_yaw
+        return scaled
 
     # modifies the dynamics in place.
     # @profile
     def step(self, dynamics, action, dt):
+        # 缩放动作从 [-1, 1] 到物理范围
+        action = self._scale_action(action)
+        
         kp = 5.0  # could be more aggressive
         omega_err = dynamics.omega - action[1:]
         dw_des = -kp * omega_err
