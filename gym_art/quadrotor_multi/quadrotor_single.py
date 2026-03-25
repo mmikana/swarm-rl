@@ -98,7 +98,7 @@ def compute_reward_weighted(dynamics, goal, action, dt, time_remain, rew_coeff, 
 class QuadrotorSingle:
     def __init__(self, dynamics_params="DefaultQuad", dynamics_change=None,
                  dynamics_randomize_every=None, dyn_sampler_1=None, dyn_sampler_2=None,
-                 raw_control=True, raw_control_zero_middle=True, dim_mode='3D', tf_control=False, sim_freq=200.,
+                 action_type='raw', tf_control=False, sim_freq=200.,
                  sim_steps=2, obs_repr="xyz_vxyz_R_omega", ep_time=7, room_dims=(10.0, 10.0, 10.0),
                  init_random_state=False, sense_noise=None, verbose=False, gravity=GRAV,
                  t2w_std=0.005, t2t_std=0.0005, excite=False, dynamics_simplification=False, use_numba=False,
@@ -106,33 +106,35 @@ class QuadrotorSingle:
         np.seterr(under='ignore')
         """
         Args:
-            dynamics_params: [str or dict] loading dynamics params by name or by providing a dictionary. 
+            dynamics_params: [str or dict] loading dynamics params by name or by providing a dictionary.
                 If "random": dynamics will be randomized completely (see sample_dyn_parameters() )
                 If dynamics_randomize_every is None: it will be randomized only once at the beginning.
                 One can randomize dynamics during the end of any episode using resample_dynamics()
                 WARNING: randomization during an episode is not supported yet. Randomize ONLY before calling reset().
             dynamics_change: [dict] update to dynamics parameters relative to dynamics_params provided
-            
-            dynamics_randomize_every: [int] how often (trajectories) perform randomization dynamics_sampler_1: [dict] 
-            the first sampler to be applied. Dict must contain type (see quadrotor_randomization) and whatever params 
-            requires 
-            dynamics_sampler_2: [dict] the second sampler to be applied. Convenient if you need to 
+
+            dynamics_randomize_every: [int] how often (trajectories) perform randomization dynamics_sampler_1: [dict]
+            the first sampler to be applied. Dict must contain type (see quadrotor_randomization) and whatever params
+            requires
+            dynamics_sampler_2: [dict] the second sampler to be applied. Convenient if you need to
                 fix some params after sampling.
-            
-            raw_control: [bool] use raw control or the Mellinger controller as a default
-            raw_control_zero_middle: [bool] meaning that control will be [-1 .. 1] rather than [0 .. 1]
-            dim_mode: [str] Dimensionality of the env. 
-            Options: 1D(just a vertical stabilization), 2D(vertical plane), 3D(normal)
-            tf_control: [bool] creates Mellinger controller using TensorFlow
+
+            action_type: [str] type of action space and controller.
+                Options: 
+                    - 'raw': raw thrust control with action space [0, 1]^4
+                    - 'raw_zero_middle': raw thrust control with zero-centered action space [-1, 1]^4
+                    - 'omegathrust': omega-thrust control (1D thrust + 3D angular rates)
+                    - 'mellinger': Mellinger position controller (uses goal for control)
+            tf_control: [bool] creates Mellinger controller using TensorFlow (only used when action_type='mellinger')
             sim_freq (float): frequency of simulation
             sim_steps: [int] how many simulation steps for each control step
             obs_repr: [str] options: xyz_vxyz_rot_omega, xyz_vxyz_quat_omega
-            ep_time: [float] episode time in simulated seconds. 
+            ep_time: [float] episode time in simulated seconds.
                 This parameter is used to compute env max time length in steps.
             room_size: [int] env room size. Not the same as the initialization box to allow shorter episodes
             init_random_state: [bool] use random state initialization or horizontal initialization with 0 velocities
             rew_coeff: [dict] weights for different reward components (see compute_weighted_reward() function)
-            sens_noise (dict or str): sensor noise parameters. If None - no noise. If "default" then the default params 
+            sens_noise (dict or str): sensor noise parameters. If None - no noise. If "default" then the default params
                 are loaded. Otherwise one can provide specific params.
             excite: [bool] change the set point at the fixed frequency to perturb the quad
         """
@@ -160,13 +162,17 @@ class QuadrotorSingle:
         self.control_freq = sim_freq / sim_steps
         self.traj_count = 0
 
-        # Self dynamics
-        self.dim_mode = dim_mode
-        self.raw_control_zero_middle = raw_control_zero_middle
+        # Action type and control
+        self.action_type = action_type
         self.tf_control = tf_control
+        
+        # Validate action_type
+        valid_action_types = ['raw', 'raw_zero_middle', 'omegathrust', 'mellinger']
+        if action_type not in valid_action_types:
+            raise ValueError(f"Invalid action_type '{action_type}'. Must be one of {valid_action_types}")
+        
         self.dynamics_randomize_every = dynamics_randomize_every
         self.verbose = verbose
-        self.raw_control = raw_control
         self.gravity = gravity
         self.update_sense_noise(sense_noise=sense_noise)
         self.t2w_std = t2w_std
@@ -252,22 +258,27 @@ class QuadrotorSingle:
         self.dynamics_params = dynamics_params
         self.dynamics = QuadrotorDynamics(model_params=dynamics_params,
                                           dynamics_steps_num=self.sim_steps, room_box=self.room_box,
-                                          dim_mode=self.dim_mode, gravity=self.gravity,
+                                          dim_mode='3D', gravity=self.gravity,
                                           dynamics_simplification=self.dynamics_simplification,
                                           use_numba=self.use_numba, dt=self.dt)
 
-        # CONTROL
-        if self.raw_control:
-            if self.dim_mode == '1D':  # Z axis only
-                self.controller = VerticalControl(self.dynamics, zero_action_middle=self.raw_control_zero_middle)
-            elif self.dim_mode == '2D':  # X and Z axes only
-                self.controller = VertPlaneControl(self.dynamics, zero_action_middle=self.raw_control_zero_middle)
-            elif self.dim_mode == '3D':
-                self.controller = RawControl(self.dynamics, zero_action_middle=self.raw_control_zero_middle)
-            else:
-                raise ValueError('QuadEnv: Unknown dimensionality mode %s' % self.dim_mode)
-        else:
+        # CONTROL - select controller based on action_type
+        if self.action_type == 'raw':
+            # Raw thrust control with action space [0, 1]^4
+            self.controller = RawControl(self.dynamics, zero_action_middle=False)
+        elif self.action_type == 'raw_zero_middle':
+            # Raw thrust control with zero-centered action space [-1, 1]^4
+            self.controller = RawControl(self.dynamics, zero_action_middle=True)
+        elif self.action_type == 'omegathrust':
+            # Omega-thrust control (1D thrust + 3D angular rates)
+            controller = OmegaThrustControl(self.dynamics)
+            controller.step_func = controller.step  # Add step_func alias
+            self.controller = controller
+        elif self.action_type == 'mellinger':
+            # Mellinger position controller
             self.controller = NonlinearPositionController(self.dynamics, tf_control=self.tf_control)
+        else:
+            raise ValueError(f"Invalid action_type '{self.action_type}'")
 
         # ACTIONS
         self.action_space = self.controller.action_space(self.dynamics)
@@ -342,7 +353,11 @@ class QuadrotorSingle:
         self.actions[1] = copy.deepcopy(self.actions[0])
         self.actions[0] = copy.deepcopy(action)
 
-        self.controller.step_func(dynamics=self.dynamics, action=action, goal=self.goal, dt=self.dt, observation=None)
+        # OmegaThrustControl doesn't use goal, so handle it separately
+        if self.action_type == 'omegathrust':
+            self.controller.step_func(dynamics=self.dynamics, action=action, dt=self.dt)
+        else:
+            self.controller.step_func(dynamics=self.dynamics, action=action, goal=self.goal, dt=self.dt, observation=None)
 
         self.time_remain = self.ep_len - self.tick
         reward, rew_info = compute_reward_weighted(
@@ -391,13 +406,14 @@ class QuadrotorSingle:
 
         if self.box < 10:
             self.box = self.box * self.box_scale
-        x, y, z = self.np_random.uniform(-self.box, self.box, size=(3,)) + self.spawn_point
+        
+        # Handle spawn_point being None
+        if self.spawn_point is None:
+            x, y, z = self.np_random.uniform(-self.box, self.box, size=(3,))
+        else:
+            x, y, z = self.np_random.uniform(-self.box, self.box, size=(3,)) + self.spawn_point
 
-        if self.dim_mode == '1D':
-            x, y = self.goal[0], self.goal[1]
-        elif self.dim_mode == '2D':
-            y = self.goal[1]
-        # Since being near the groud means crash we have to start above
+        # Since being near the ground means crash we have to start above
         if z < 0.75:
             z = 0.75
         pos = npa(x, y, z)
@@ -405,33 +421,19 @@ class QuadrotorSingle:
         # INIT STATE
         # Initializing rotation and velocities
         if self.init_random_state:
-            if self.dim_mode == '1D':
-                omega, rotation = np.zeros(3, dtype=np.float64), np.eye(3)
-                vel = np.array([0, 0, self.max_init_vel * np.random.rand()])
-            elif self.dim_mode == '2D':
-                omega = npa(0, self.max_init_omega * np.random.rand(), 0)
-                vel = self.max_init_vel * np.random.rand(3)
-                vel[1] = 0.
-                theta = np.pi * np.random.rand()
-                c, s = np.cos(theta), np.sin(theta)
-                rotation = np.array(((c, 0, -s), (0, 1, 0), (s, 0, c)))
-            else:
-                # It already sets the state internally
-                _, vel, rotation, omega = self.dynamics.random_state(
-                    box=(self.room_length, self.room_width, self.room_height), vel_max=self.max_init_vel,
-                    omega_max=self.max_init_omega
-                )
+            # 3D random state initialization
+            _, vel, rotation, omega = self.dynamics.random_state(
+                box=(self.room_length, self.room_width, self.room_height), vel_max=self.max_init_vel,
+                omega_max=self.max_init_omega
+            )
         else:
             # INIT HORIZONTALLY WITH 0 VEL and OMEGA
             vel, omega = np.zeros(3, dtype=np.float64), np.zeros(3, dtype=np.float64)
 
-            if self.dim_mode == '1D' or self.dim_mode == '2D':
-                rotation = np.eye(3)
-            else:
-                # make sure we're sort of pointing towards goal (for mellinger controller)
+            # make sure we're sort of pointing towards goal (for mellinger controller)
+            rotation = randyaw()
+            while np.dot(rotation[:, 0], to_xyhat(-pos)) < 0.5:
                 rotation = randyaw()
-                while np.dot(rotation[:, 0], to_xyhat(-pos)) < 0.5:
-                    rotation = randyaw()
 
         self.init_state = [pos, vel, rotation, omega]
         self.dynamics.set_state(pos, vel, rotation, omega)

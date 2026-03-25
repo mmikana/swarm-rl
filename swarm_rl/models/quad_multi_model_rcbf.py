@@ -13,7 +13,7 @@ from torch import Tensor
 
 from sample_factory.model.actor_critic import ActorCriticSharedWeights, ActorCriticSeparateWeights
 from sample_factory.algo.utils.tensor_dict import TensorDict
-from swarm_rl.rcbf.quad_cbf_qp import QuadCBFQPLayer
+from swarm_rl.cbf.quad_cbf_qp import QuadCBFQPLayer
 
 
 class QuadActorCriticWithCBF(ActorCriticSharedWeights):
@@ -78,7 +78,6 @@ class QuadActorCriticWithCBF(ActorCriticSharedWeights):
                 alpha_1=getattr(cfg, 'quads_cbf_alpha_1', 1.0),
                 alpha_2=getattr(cfg, 'quads_cbf_alpha_2', 1.0),
                 R_obs=getattr(cfg, 'quads_cbf_R_obs', 0.5),
-                epsilon=getattr(cfg, 'quads_cbf_epsilon', 0.1),
                 sdf_resolution=getattr(cfg, 'quads_cbf_sdf_resolution', 0.1),
             )
 
@@ -163,13 +162,19 @@ class QuadActorCriticWithCBF(ActorCriticSharedWeights):
         if sample_actions:
             # 使用基类方法采样
             actions = self.last_action_distribution.sample()
+            # ⚠️ 关键修复：确保动作被严格约束到 [-1, 1]
+            # 这对 CBF-QP 层的输入有效性至关重要
+            # Sample Factory 的 tanh 可能在边界处不够精确
+            actions = torch.clamp(actions, min=-1.0, max=1.0)
             log_prob_actions = self.last_action_distribution.log_prob(actions)
             u_rl = actions
         else:
             # 推理时使用 mean
             u_rl = action_distribution_params
+            # 推理时也要约束
+            u_rl = torch.clamp(u_rl, min=-1.0, max=1.0)
             log_prob_actions = None
-            actions = action_distribution_params
+            actions = u_rl
 
         # 4. CBF-QP 层（如果启用）
         if self.use_cbf and obs is not None:
@@ -281,7 +286,6 @@ class QuadActorCriticWithCBFSeparate(ActorCriticSeparateWeights):
                 alpha_1=getattr(cfg, 'quads_cbf_alpha_1', 1.0),
                 alpha_2=getattr(cfg, 'quads_cbf_alpha_2', 1.0),
                 R_obs=getattr(cfg, 'quads_cbf_R_obs', 0.5),
-                epsilon=getattr(cfg, 'quads_cbf_epsilon', 0.1),
                 sdf_resolution=getattr(cfg, 'quads_cbf_sdf_resolution', 0.1),
             )
 
@@ -334,13 +338,18 @@ class QuadActorCriticWithCBFSeparate(ActorCriticSeparateWeights):
         # 4. 采样动作 u_rl（标称控制）
         if sample_actions:
             actions = self.last_action_distribution.sample()
+            # ⚠️ 关键修复：确保动作被严格约束到 [-1, 1]
+            # 这对 CBF-QP 层的输入有效性至关重要
+            actions = torch.clamp(actions, min=-1.0, max=1.0)
             log_prob_actions = self.last_action_distribution.log_prob(actions)
             u_rl = actions
         else:
             # 推理时使用 mean
             u_rl = action_distribution_params
+            # 推理时也要约束
+            u_rl = torch.clamp(u_rl, min=-1.0, max=1.0)
             log_prob_actions = None
-            actions = action_distribution_params
+            actions = u_rl
 
         # 5. CBF-QP 层（如果启用）
         if self.use_cbf and obs is not None:

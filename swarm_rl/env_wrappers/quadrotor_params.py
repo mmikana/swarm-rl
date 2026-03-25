@@ -110,6 +110,12 @@ def add_quadrotors_env_args(env, parser):
                                                                              'many steps. Default (0.0) is no '
                                                                              'annealing')
 
+    # Action Type
+    p.add_argument('--quads_action_type', default='raw', type=str,
+                   choices=['raw', 'raw_zero_middle', 'omegathrust', 'mellinger'],
+                   help='Type of action space and controller: raw (thrust [0,1]), raw_zero_middle (thrust [-1,1]), '
+                        'omegathrust (angular rates + thrust), mellinger (position controller)')
+
     # Rendering
     p.add_argument('--quads_view_mode', nargs='+', default=['topdown', 'chase', 'global'],
                    type=str, choices=['topdown', 'chase', 'side', 'global', 'corner0', 'corner1', 'corner2', 'corner3', 'topdownfollow'],

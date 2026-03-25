@@ -32,10 +32,10 @@ class QuadrotorEnvMulti(gym.Env):
                  use_downwash, use_numba, quads_mode, room_dims, use_replay_buffer, quads_view_mode,
                  quads_render,
 
-                 # Quadrotor Specific (Do Not Change)
-                 dynamics_params, raw_control, raw_control_zero_middle,
-                 dynamics_randomize_every, dynamics_change, dyn_sampler_1,
-                 sense_noise, init_random_state,
+                 # Quadrotor Specific
+                 dynamics_params, action_type='raw',
+                 dynamics_randomize_every=None, dynamics_change=None, dyn_sampler_1=None,
+                 sense_noise='default', init_random_state=False,
                  # Rendering
                  render_mode='human'
                  ):
@@ -62,7 +62,7 @@ class QuadrotorEnvMulti(gym.Env):
                 # Quad Parameters
                 dynamics_params=dynamics_params, dynamics_change=dynamics_change,
                 dynamics_randomize_every=dynamics_randomize_every, dyn_sampler_1=dyn_sampler_1,
-                raw_control=raw_control, raw_control_zero_middle=raw_control_zero_middle, sense_noise=sense_noise,
+                action_type=action_type, sense_noise=sense_noise,
                 init_random_state=init_random_state, obs_repr=obs_repr, ep_time=ep_time, room_dims=room_dims,
                 use_numba=use_numba,
                 # Neighbor

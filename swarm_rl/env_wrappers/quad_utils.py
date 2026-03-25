@@ -21,7 +21,6 @@ def make_quadrotor_env_multi(cfg, render_mode=None, **kwargs):
     from gym_art.quadrotor_multi.quadrotor_multi import QuadrotorEnvMulti
     quad = 'Crazyflie'
     dyn_randomize_every = dyn_randomization_ratio = None
-    raw_control = raw_control_zero_middle = True
 
     sampler_1 = None
     if dyn_randomization_ratio is not None:
@@ -56,8 +55,8 @@ def make_quadrotor_env_multi(cfg, render_mode=None, **kwargs):
         use_replay_buffer=use_replay_buffer,
         # Rendering
         quads_view_mode=cfg.quads_view_mode, quads_render=cfg.quads_render,
-        # Quadrotor Specific (Do Not Change)
-        dynamics_params=quad, raw_control=raw_control, raw_control_zero_middle=raw_control_zero_middle,
+        # Quadrotor Specific
+        dynamics_params=quad, action_type=cfg.quads_action_type,
         dynamics_randomize_every=dyn_randomize_every, dynamics_change=dynamics_change, dyn_sampler_1=sampler_1,
         sense_noise=sense_noise, init_random_state=False,
         # Rendering
