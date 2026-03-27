@@ -13,7 +13,7 @@ from torch import Tensor
 
 from sample_factory.model.actor_critic import ActorCriticSharedWeights, ActorCriticSeparateWeights
 from sample_factory.algo.utils.tensor_dict import TensorDict
-from swarm_rl.cbf.quad_cbf_qp import QuadCBFQPLayer
+from swarm_rl.cbf.cbf_layer import DistanceAwareCBFLayer
 
 
 class QuadActorCriticWithCBF(ActorCriticSharedWeights):
@@ -73,12 +73,11 @@ class QuadActorCriticWithCBF(ActorCriticSharedWeights):
                     f"CBF requires at least {self.self_obs_dim + 9} dimensions for SDF observations."
                 )
 
-            # 创建 CBF-QP 层 (物理参数自动从动力学模型读取)
-            self.cbf_layer = QuadCBFQPLayer(
-                alpha_1=getattr(cfg, 'quads_cbf_alpha_1', 1.0),
-                alpha_2=getattr(cfg, 'quads_cbf_alpha_2', 1.0),
-                R_obs=getattr(cfg, 'quads_cbf_R_obs', 0.5),
-                sdf_resolution=getattr(cfg, 'quads_cbf_sdf_resolution', 0.1),
+            # 创建 CBF-QP 层 (使用距离感知姿态屏障函数)
+            self.cbf_layer = DistanceAwareCBFLayer(
+                alpha_cbf=getattr(cfg, 'quads_cbf_alpha', 1.0),
+                k=getattr(cfg, 'quads_cbf_k', 2.0),
+                sigma=getattr(cfg, 'quads_cbf_sigma', 0.1),
             )
 
             # 验证 SDF 观测位置
@@ -95,25 +94,21 @@ class QuadActorCriticWithCBF(ActorCriticSharedWeights):
         从观测中提取状态信息（用于CBF约束计算）
 
         观测结构：[pos_rel(3), vel(3), rot(9), omega(3), ...]
-        注意：pos_rel 是相对于目标的位置，CBF 不需要全局位置（SDF 已包含空间信息）
 
         Args:
             obs: (batch_size, obs_dim) tensor
 
         Returns:
-            dict with 'vel', 'rot', 'omega'
+            dict with 'vel', 'R' (旋转矩阵)
         """
         # 提取速度 vel (index 3:6)
         vel = obs[:, 3:6]
 
         # 提取旋转矩阵 rot (index 6:15)
         rot_flat = obs[:, 6:15]
-        rot = rot_flat.reshape(-1, 3, 3)
+        R = rot_flat.reshape(-1, 3, 3)
 
-        # 提取角速度 omega (index 15:18)
-        omega = obs[:, 15:18]
-
-        return {'vel': vel, 'rot': rot, 'omega': omega}
+        return {'vel': vel, 'R': R}
 
     def _extract_sdf_from_obs(self, obs):
         """
@@ -183,8 +178,9 @@ class QuadActorCriticWithCBF(ActorCriticSharedWeights):
             sdf_obs = self._extract_sdf_from_obs(obs)
 
             # 调用 CBF-QP 层计算安全动作
+            # DistanceAwareCBFLayer 签名: forward(rl_output, state, sdf_obs)
             try:
-                u_final = self.cbf_layer(state, u_rl, sdf_obs)
+                u_final = self.cbf_layer(u_rl, state, sdf_obs)
             except Exception as e:
                 # 如果 CBF 失败，回退到原始动作
                 print(f"Warning: CBF-QP failed: {e}, using u_rl")
@@ -281,12 +277,11 @@ class QuadActorCriticWithCBFSeparate(ActorCriticSeparateWeights):
                     f"CBF requires at least {self.self_obs_dim + 9} dimensions for SDF observations."
                 )
 
-            # 创建 CBF-QP 层 (物理参数自动从动力学模型读取)
-            self.cbf_layer = QuadCBFQPLayer(
-                alpha_1=getattr(cfg, 'quads_cbf_alpha_1', 1.0),
-                alpha_2=getattr(cfg, 'quads_cbf_alpha_2', 1.0),
-                R_obs=getattr(cfg, 'quads_cbf_R_obs', 0.5),
-                sdf_resolution=getattr(cfg, 'quads_cbf_sdf_resolution', 0.1),
+            # 创建 CBF-QP 层 (使用距离感知姿态屏障函数)
+            self.cbf_layer = DistanceAwareCBFLayer(
+                alpha_cbf=getattr(cfg, 'quads_cbf_alpha', 1.0),
+                k=getattr(cfg, 'quads_cbf_k', 2.0),
+                sigma=getattr(cfg, 'quads_cbf_sigma', 0.1),
             )
 
             # 验证 SDF 观测位置
@@ -302,9 +297,8 @@ class QuadActorCriticWithCBFSeparate(ActorCriticSeparateWeights):
         """从观测中提取状态信息（用于CBF约束计算）"""
         vel = obs[:, 3:6]
         rot_flat = obs[:, 6:15]
-        rot = rot_flat.reshape(-1, 3, 3)
-        omega = obs[:, 15:18]
-        return {'vel': vel, 'rot': rot, 'omega': omega}
+        R = rot_flat.reshape(-1, 3, 3)
+        return {'vel': vel, 'R': R}
 
     def _extract_sdf_from_obs(self, obs):
         """从观测中提取 SDF 信息"""
@@ -358,8 +352,9 @@ class QuadActorCriticWithCBFSeparate(ActorCriticSeparateWeights):
             sdf_obs = self._extract_sdf_from_obs(obs)
 
             # 调用 CBF-QP 层计算安全动作
+            # DistanceAwareCBFLayer 签名: forward(rl_output, state, sdf_obs)
             try:
-                u_final = self.cbf_layer(state, u_rl, sdf_obs)
+                u_final = self.cbf_layer(u_rl, state, sdf_obs)
             except Exception as e:
                 # 如果 CBF 失败，回退到原始动作
                 print(f"Warning: CBF-QP failed: {e}, using u_rl")

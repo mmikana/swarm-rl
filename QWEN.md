@@ -124,6 +124,5 @@ The project is associated with several research papers:
 - 20260107  qwen --resume f7be4949-c50d-42d9-8555-533608f88e8a
 - 20260108 qwen --resume f7be4949-c50d-42d9-8555-533608f88e8a
 - QuadSwarm-RL 项目研究：单无人机 RCBF（鲁棒控制屏障函数）安全控制。推力空间 RCBF-QP 公式已推导完成 - 直接在 4 维电机推力空间求解 QP，输出与 RL 策略对齐。核心创新：A_obs(x) = (2T_max/m)(p-p_obs)ᵀRe₃1ᵀ，完整约束矩阵公式已文档化于 docs/RCBF_理论推导.md
-rcbf qwen --resume 25e1b023-cd07-4c14-a74f-ae1d84ba9116
-controller_type qwen --resume 2a8caaf4-8f86-4685-b48c-29f9b59c2403
-3.17 qwen --resume 021516b4-75e4-4953-a4b6-06007de2d962
+
+qwen --resume 5dc713d3-755c-4087-81ab-d304c0b10fbd

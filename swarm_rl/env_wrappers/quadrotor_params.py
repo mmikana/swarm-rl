@@ -133,14 +133,10 @@ def add_quadrotors_env_args(env, parser):
 
     # Note: mass and thrust_to_weight are automatically read from dynamics model (crazyflie_params)
 
-    # CBF Gain Parameters
-    p.add_argument('--quads_cbf_alpha_1', default=1.0, type=float,
-                   help='CBF gain parameter alpha_1 (s^-1). Larger = faster response')
-    p.add_argument('--quads_cbf_alpha_2', default=1.0, type=float,
-                   help='CBF gain parameter alpha_2 (s^-1). Larger = more conservative')
-
-    # Obstacle Parameters (for CBF)
-    p.add_argument('--quads_cbf_R_obs', default=0.5, type=float,
-                   help='Obstacle radius in meters (used for SDF gradient calculation)')
-    p.add_argument('--quads_cbf_sdf_resolution', default=0.1, type=float,
-                   help='SDF grid resolution in meters (default: 0.1)')
+    # CBF Gain Parameters (DistanceAwareCBFLayer)
+    p.add_argument('--quads_cbf_alpha', default=1.0, type=float,
+                   help='CBF gain parameter alpha_cbf. Larger = stronger constraint')
+    p.add_argument('--quads_cbf_k', default=2.0, type=float,
+                   help='Distance decay rate k in alpha(p)=exp(-k*p). Larger = faster decay')
+    p.add_argument('--quads_cbf_sigma', default=0.1, type=float,
+                   help='Safety buffer sigma (m). Prevents constraint violation at hovering')

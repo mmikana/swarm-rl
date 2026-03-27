@@ -14,7 +14,7 @@ OBSTACLE_MODEL_CLI = QUAD_BASELINE_CLI_8 + (
     '--wandb_group=final '
     '--quads_cbf_k_omega=0 '
     '--quads_use_cbf=True --quads_cbf_alpha_1=0.1  --quads_cbf_alpha_2=0.1  --quads_cbf_k_omega =0  --quads_cbf_epsilon=0.1 '
-    '--quads_cbf_R_obs=0.5'
+    '--quads_cbf_safety_allowance=0.1'
 )
 
 _experiment = Experiment(

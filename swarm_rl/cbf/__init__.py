@@ -1,7 +1,9 @@
 """
-RCBF (Robust Control Barrier Function) module for safe quadrotor control.
+CBF (Control Barrier Function) 模块
+
+提供距离感知的姿态 CBF-QP 层，用于四旋翼无人机避障。
 """
 
-from swarm_rl.cbf.quad_cbf_qp import QuadCBFQPLayer
+from .cbf_layer import DistanceAwareCBFLayer
 
-__all__ = ['QuadCBFQPLayer']
+__all__ = ['DistanceAwareCBFLayer']
