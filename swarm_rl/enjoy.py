@@ -12,23 +12,28 @@ def main():
     # Parse config first to check if CBF was used during training
     cfg = parse_swarm_cfg(evaluation=True)
 
-    # Manually load config.json from checkpoint to detect CBF
+    # Manually load config.json from checkpoint to detect CBF and Adaptive Skill
     # Sample Factory's parse_swarm_cfg may not load all custom params correctly
     use_cbf = False
+    use_adaptive_skill = False
     if hasattr(cfg, 'train_dir') and hasattr(cfg, 'experiment'):
         config_path = Path(cfg.train_dir) / cfg.experiment / 'config.json'
         if config_path.exists():
             with open(config_path, 'r') as f:
                 checkpoint_cfg = json.load(f)
                 use_cbf = checkpoint_cfg.get('quads_use_cbf', False)
+                use_adaptive_skill = checkpoint_cfg.get('quads_use_adaptive_skill', False)
                 print(f"[INFO] Loaded config from {config_path}")
                 print(f"[INFO] quads_use_cbf={use_cbf}")
+                print(f"[INFO] quads_use_adaptive_skill={use_adaptive_skill}")
         else:
             # Fallback to cfg attribute
             use_cbf = getattr(cfg, 'quads_use_cbf', False)
-            print(f"[INFO] Config file not found, using cfg.quads_use_cbf={use_cbf}")
+            use_adaptive_skill = getattr(cfg, 'quads_use_adaptive_skill', False)
+            print(f"[INFO] Config file not found, using cfg attributes")
     else:
         use_cbf = getattr(cfg, 'quads_use_cbf', False)
+        use_adaptive_skill = getattr(cfg, 'quads_use_adaptive_skill', False)
 
     # IMPORTANT: CBF支持两种架构
     # - actor_critic_share_weights=True: 使用 QuadActorCriticWithCBF
@@ -38,7 +43,10 @@ def main():
         print(f"[INFO] CBF detected with actor_critic_share_weights={cfg.actor_critic_share_weights}")
         print(f"[INFO] Will use {'QuadActorCriticWithCBF (Shared)' if cfg.actor_critic_share_weights else 'QuadActorCriticWithCBFSeparate (Separate)'}")
 
-    register_swarm_components(use_cbf=use_cbf)
+    if use_adaptive_skill:
+        print(f"[INFO] Adaptive Skill detected with num_skills={getattr(cfg, 'quads_num_skills', 3)}")
+
+    register_swarm_components(use_cbf=use_cbf, use_adaptive_skill=use_adaptive_skill)
 
     status = enjoy(cfg)
     return status

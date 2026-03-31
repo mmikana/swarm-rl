@@ -140,3 +140,32 @@ def add_quadrotors_env_args(env, parser):
                    help='Distance decay rate k in alpha(p)=exp(-k*p). Larger = faster decay')
     p.add_argument('--quads_cbf_sigma', default=0.1, type=float,
                    help='Safety buffer sigma (m). Prevents constraint violation at hovering')
+
+    # ========== Adaptive Skill RL Parameters ==========
+    # Adaptive Skill Toggle
+    p.add_argument('--quads_use_adaptive_skill', default=False, type=str2bool,
+                   help='Enable Adaptive Skill RL with multiple skill heads')
+
+    # Skill Configuration
+    p.add_argument('--quads_num_skills', default=3, type=int,
+                   help='Number of skills to learn (default: 3)')
+
+    # Diversity Loss Toggle (for testing)
+    p.add_argument('--quads_use_diversity_loss', default=False, type=str2bool,
+                   help='Enable diversity loss to encourage skill differentiation')
+
+    # Skill Bias (for guided differentiation)
+    p.add_argument('--quads_use_skill_bias', default=True, type=str2bool,
+                   help='Use skill-specific bias to guide differentiation')
+
+    # Diversity Loss Weight
+    p.add_argument('--diversity_loss_weight', default=0.5, type=float,
+                   help='Weight for diversity loss in total loss (default: 0.5)')
+
+    # Balance Loss Weight
+    p.add_argument('--balance_loss_weight', default=0.1, type=float,
+                   help='Weight for skill balance loss (default: 0.1)')
+
+    # Gating Temperature
+    p.add_argument('--gating_temperature', default=1.0, type=float,
+                   help='Initial gating temperature for softmax (default: 1.0)')

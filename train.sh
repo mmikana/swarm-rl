@@ -1,1 +1,1 @@
-python -m sample_factory.launcher.run --run=swarm_rl.runs.cbf.quads_use_cbf --backend=processes --max_parallel=1 --pause_between=1 --experiments_per_gpu=0 --num_gpus=0
+python -m sample_factory.launcher.run --run=swarm_rl.runs.adaptive_skill.quads_use_adaptive_skill --backend=processes --max_parallel=1 --pause_between=1 --experiments_per_gpu=0 --num_gpus=0

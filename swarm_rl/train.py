@@ -22,7 +22,7 @@ def make_actor_critic_with_cbf(cfg, obs_space, action_space):
     Custom Actor-Critic factory that uses CBF.
     This is a module-level function to support pickling for multiprocessing.
 
-    根据 cfg.actor_critic_share_weights 选择对应的CBF模型:
+    根据 cfg.actor_critic_share_weights 选择对应的 CBF 模型:
     - True: QuadActorCriticWithCBF (继承 ActorCriticSharedWeights)
     - False: QuadActorCriticWithCBFSeparate (继承 ActorCriticSeparateWeights)
     """
@@ -37,25 +37,43 @@ def make_actor_critic_with_cbf(cfg, obs_space, action_space):
         return QuadActorCriticWithCBFSeparate(model_factory, obs_space, action_space, cfg)
 
 
-def register_swarm_components(use_cbf=False):
+def register_swarm_components(use_cbf=False, use_adaptive_skill=False):
     """
     Register swarm environment and models
 
     Args:
         use_cbf: If True, register CBF-enabled Actor-Critic model
+        use_adaptive_skill: If True, register Adaptive Skill model
     """
     register_env("quadrotor_multi", make_quadrotor_env)
     register_models()
 
+    from sample_factory.algo.utils.context import global_model_factory
+
     # Register custom Actor-Critic if using CBF
     if use_cbf:
-        from sample_factory.algo.utils.context import global_model_factory
-        
         # Store reference for pickling
         global _CBF_MODEL_CLASS
-        
+
         # Override the default Actor-Critic factory
         global_model_factory().make_actor_critic_func = make_actor_critic_with_cbf
+
+    # Register custom Actor-Critic if using Adaptive Skill
+    if use_adaptive_skill:
+        # Override the default Actor-Critic factory
+        global_model_factory().make_actor_critic_func = make_actor_critic_with_adaptive_skill
+
+
+def make_actor_critic_with_adaptive_skill(cfg, obs_space, action_space):
+    """
+    Custom Actor-Critic factory that uses Adaptive Skill.
+    This is a module-level function to support pickling for multiprocessing.
+    """
+    from sample_factory.algo.utils.context import global_model_factory
+    from swarm_rl.adaptive_skill.models.adaptive_skill_model import AdaptiveSkillPolicy
+
+    model_factory = global_model_factory()
+    return AdaptiveSkillPolicy(model_factory, obs_space, action_space, cfg)
 
 
 def parse_swarm_cfg(argv=None, evaluation=False):
@@ -73,7 +91,12 @@ def main():
 
     # Register components (with or without CBF)
     use_cbf = getattr(cfg, 'quads_use_cbf', False)
-    register_swarm_components(use_cbf=use_cbf)
+    use_adaptive_skill = getattr(cfg, 'quads_use_adaptive_skill', False)
+
+    register_swarm_components(use_cbf=use_cbf, use_adaptive_skill=use_adaptive_skill)
+
+    # 注意：移除了 diversity_loss 后，不需要自定义 Learner
+    # Sample Factory 默认的 Learner 就可以正常训练 Adaptive Skill
 
     # Run training
     status = run_rl(cfg)

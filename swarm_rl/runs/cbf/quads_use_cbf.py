@@ -12,7 +12,7 @@ OBSTACLE_MODEL_CLI = QUAD_BASELINE_CLI_8 + (
     '--quads_neighbor_visible_num=0 --quads_neighbor_obs_type=pos_vel --quads_encoder_type=attention '
     '--with_wandb=False --wandb_project=Quad-Swarm-RL --wandb_user=multi-drones '
     '--wandb_group=final '
-    '--quads_use_cbf=True --quads_cbf_alpha=1.0 --quads_cbf_k=2.0 --quads_cbf_sigma=0.1 --quads_action_type=omegathrust'
+    '--quads_use_cbf=True --quads_cbf_alpha=0.1 --quads_cbf_k=2.0 --quads_cbf_sigma=0.1 --quads_action_type=omegathrust'
 )
 
 _experiment = Experiment(
