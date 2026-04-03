@@ -69,6 +69,11 @@ def make_quadrotor_env_multi(cfg, render_mode=None, **kwargs):
                                       cfg.quads_obst_density_min, cfg.quads_obst_density_max, cfg.quads_obst_size_min, cfg.quads_obst_size_max)
 
     reward_shaping = copy.deepcopy(DEFAULT_QUAD_REWARD_SHAPING)
+    reward_shaping['quad_rewards']['pos'] = cfg.quads_reward_pos
+    reward_shaping['quad_rewards']['effort'] = cfg.quads_reward_effort
+    reward_shaping['quad_rewards']['spin'] = cfg.quads_reward_spin
+    reward_shaping['quad_rewards']['crash'] = cfg.quads_reward_crash
+    reward_shaping['quad_rewards']['orient'] = cfg.quads_reward_orient
 
     reward_shaping['quad_rewards']['quadcol_bin'] = cfg.quads_collision_reward
     reward_shaping['quad_rewards']['quadcol_bin_smooth_max'] = cfg.quads_collision_smooth_max_penalty

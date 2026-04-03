@@ -18,20 +18,21 @@ _params = ParamGrid(
 )
 
 # 基础命令行（继承自 obstacle baseline）
-# 当前配置对应 weak_guidance：开启 diversity loss
+# 当前配置用于单头 PPO baseline，并去掉 orient / spin 对机动的直接压制
 ADAPTIVE_SKILL_CLI = QUAD_BASELINE_CLI_8 + (
     '--quads_neighbor_visible_num=0 --quads_neighbor_obs_type=pos_vel --quads_encoder_type=attention '
     '--with_wandb=False --wandb_project=Quad-Swarm-RL --wandb_user=multi-drones '
     '--wandb_group=adaptive_skill '
-    '--quads_use_adaptive_skill=True --quads_num_skills=3 '
-    '--quads_use_diversity_loss=True --diversity_loss_weight=0.2 '
+    '--quads_use_adaptive_skill=False '
+    '--quads_use_diversity_loss=False '
+    '--quads_reward_orient=0.0 --quads_reward_spin=0.0 '
     '--quads_action_type=omegathrust'
 )
 
 
 # 实验定义
 _experiment = Experiment(
-    "diverse_loss_0.2",
+    "ppo_baseline_wo_orient_spin",
     ADAPTIVE_SKILL_CLI,
     _params.generate_params(randomize=False),
 )
