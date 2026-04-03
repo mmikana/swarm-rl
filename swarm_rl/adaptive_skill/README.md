@@ -62,20 +62,12 @@ bash train.sh
 |------|-------|------|
 | `--quads_num_skills` | 3 | 技能数量 |
 | `--quads_use_adaptive_skill` | False | 启用 Adaptive Skill |
-| `--quads_use_skill_bias` | True | 使用技能偏置 |
-
 ### 损失配置
 
 | 参数 | 默认值 | 说明 |
 |------|-------|------|
 | `--diversity_loss_weight` | 0.5 | 多样性损失权重 |
 | `--balance_loss_weight` | 0.1 | 均衡损失权重 |
-
-### 选择器配置
-
-| 参数 | 默认值 | 说明 |
-|------|-------|------|
-| `--gating_temperature` | 1.0 | 选择器温度系数 |
 
 ---
 
@@ -94,20 +86,7 @@ class AdaptiveSkillPolicy(ActorCriticSharedWeights):
     """
 ```
 
-### 2. 技能头（带偏置）
-
-```python
-class SkillHeadWithBias(nn.Module):
-    """
-    技能头（带偏置，引导分化）
-    
-    Skill 0: 推力偏置 [1, 0, 0, 0] → 巡航
-    Skill 1: Yaw 偏置 [0, 0, 0, 1] → 避障
-    Skill 2: Roll/Pitch偏置 [0, 1, 1, 0] → 机动
-    """
-```
-
-### 3. 选择器（带温度）
+### 2. 选择器（带温度）
 
 ```python
 class GatingWithTemperature(nn.Module):
@@ -152,12 +131,6 @@ tensorboard --logdir=train_dir/adaptive_skill_001
 - 训练中期（1M-3M 步）：多样性损失权重 0.3
 - 训练后期（3M-5M 步）：多样性损失权重 0.1
 
-### 3. 技能偏置
-
-**作用**：加速技能分化，避免所有技能学到相同行为。
-
-**建议**：始终开启（`--quads_use_skill_bias=True`）
-
 ---
 
 ## 🔧 故障排除
@@ -168,16 +141,14 @@ tensorboard --logdir=train_dir/adaptive_skill_001
 
 **解决**：
 1. 增加多样性损失权重（`--diversity_loss_weight=1.0`）
-2. 检查技能偏置是否启用（`--quads_use_skill_bias=True`）
-3. 延长训练时间
+2. 延长训练时间
 
 ### 问题 2: 选择器坍塌
 
 **症状**：总是选择同一个技能（权重 [0.9, 0.05, 0.05]）。
 
 **解决**：
-1. 增加温度系数（`--gating_temperature=2.0`）
-2. 添加均衡损失（`--balance_loss_weight=0.5`）
+1. 添加均衡损失（`--balance_loss_weight=0.5`）
 
 ### 问题 3: 训练不稳定
 

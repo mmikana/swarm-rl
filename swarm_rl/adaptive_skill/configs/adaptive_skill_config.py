@@ -25,13 +25,6 @@ def add_adaptive_skill_args(parser):
         help='Whether to use adaptive skill policy'
     )
     
-    parser.add_argument(
-        '--quads_use_skill_bias',
-        default=True,
-        type=bool,
-        help='Whether to use skill-specific bias'
-    )
-    
     # 损失配置
     parser.add_argument(
         '--diversity_loss_weight',
@@ -45,12 +38,4 @@ def add_adaptive_skill_args(parser):
         default=0.1,
         type=float,
         help='Weight for skill balance loss (default: 0.1)'
-    )
-    
-    # 选择器配置
-    parser.add_argument(
-        '--gating_temperature',
-        default=1.0,
-        type=float,
-        help='Initial gating temperature (default: 1.0)'
     )

@@ -19,8 +19,11 @@ Adaptive Skill Policy - 多技能自适应策略网络
 """
 
 import math
+from typing import Dict
+
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 from sample_factory.model.actor_critic import ActorCriticSharedWeights
 from sample_factory.algo.utils.tensor_dict import TensorDict
 from sample_factory.algo.utils.action_distributions import get_action_distribution
@@ -124,6 +127,7 @@ class AdaptiveSkillPolicy(ActorCriticSharedWeights):
         # 技能配置
         self.num_skills = getattr(cfg, 'quads_num_skills', 3)
         self.use_adaptive_skill = getattr(cfg, 'quads_use_adaptive_skill', True)
+        self.use_diversity_loss = getattr(cfg, 'quads_use_diversity_loss', False)
 
         # 调用基类初始化（创建 Encoder, Core, Decoder, Critic）
         # 注意：我们覆写了 forward_tail，所以基类的 action_parameterization 不会被使用
@@ -146,6 +150,11 @@ class AdaptiveSkillPolicy(ActorCriticSharedWeights):
         # 但我们需要单独初始化 skill_heads 和 gating
         self._init_custom_modules()
 
+        # Learner 侧多样性损失和监控缓存
+        self.last_diversity_loss = None
+        self.last_skill_weight_mean = None
+        self.last_selector_temperature = None
+
     def _init_custom_modules(self):
         """初始化自定义模块（skill_heads 和 gating）"""
         def init_fn(m):
@@ -154,6 +163,27 @@ class AdaptiveSkillPolicy(ActorCriticSharedWeights):
         
         self.skill_heads.apply(init_fn)
         self.gating.apply(init_fn)
+
+    def _compute_diversity_loss(self, skill_means: torch.Tensor) -> torch.Tensor:
+        """
+        计算技能多样性损失。
+
+        按当前方案，对每对 skill 的 cosine similarity 做 ReLU，
+        只惩罚正相似度，避免把相反方向动作当成负奖励。
+        """
+        if skill_means.shape[1] < 2:
+            return skill_means.new_zeros(())
+
+        similarities = []
+        for i in range(skill_means.shape[1]):
+            for j in range(i + 1, skill_means.shape[1]):
+                sim = F.cosine_similarity(skill_means[:, i], skill_means[:, j], dim=-1)
+                similarities.append(F.relu(sim))
+
+        if not similarities:
+            return skill_means.new_zeros(())
+
+        return torch.stack(similarities, dim=0).mean()
 
     def forward_tail(self, core_output, values_only: bool, sample_actions: bool) -> TensorDict:
         """
@@ -190,6 +220,14 @@ class AdaptiveSkillPolicy(ActorCriticSharedWeights):
         # 分离成：
         skill_means = skill_distribution_params[..., :action_dim]  # [batch, num_skills, action_dim]
         skill_log_stds = skill_distribution_params[..., action_dim:]  # [batch, num_skills, action_dim]
+
+        # Learner 会直接读取这些缓存，不通过 rollout buffer 传递。
+        self.last_skill_weight_mean = weights.detach().mean(dim=0)
+        self.last_selector_temperature = self.gating.temperature.detach().mean()
+        if self.training and self.use_diversity_loss and self.num_skills > 1:
+            self.last_diversity_loss = self._compute_diversity_loss(skill_means)
+        else:
+            self.last_diversity_loss = skill_means.new_zeros(())
 
         # 5. 简单加权融合（保证非负）
         # 融合均值：μ_final = Σ w_k × μ_k
@@ -234,6 +272,18 @@ class AdaptiveSkillPolicy(ActorCriticSharedWeights):
         result["skill_action_log_stds"] = skill_log_stds.detach()
 
         return result
+
+    def summaries(self) -> Dict:
+        stats = super().summaries()
+
+        if self.last_skill_weight_mean is not None:
+            for idx, weight in enumerate(self.last_skill_weight_mean):
+                stats[f"skill/weight_{idx}"] = weight
+
+        if self.last_selector_temperature is not None:
+            stats["skill/selector_temperature"] = self.last_selector_temperature
+
+        return stats
 
 
 def register_adaptive_skill_model():

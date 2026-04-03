@@ -154,18 +154,10 @@ def add_quadrotors_env_args(env, parser):
     p.add_argument('--quads_use_diversity_loss', default=False, type=str2bool,
                    help='Enable diversity loss to encourage skill differentiation')
 
-    # Skill Bias (for guided differentiation)
-    p.add_argument('--quads_use_skill_bias', default=True, type=str2bool,
-                   help='Use skill-specific bias to guide differentiation')
-
     # Diversity Loss Weight
-    p.add_argument('--diversity_loss_weight', default=0.5, type=float,
-                   help='Weight for diversity loss in total loss (default: 0.5)')
+    p.add_argument('--diversity_loss_weight', default=0.2, type=float,
+                   help='Weight for diversity loss in total loss (default: 0.2)')
 
     # Balance Loss Weight
     p.add_argument('--balance_loss_weight', default=0.1, type=float,
                    help='Weight for skill balance loss (default: 0.1)')
-
-    # Gating Temperature
-    p.add_argument('--gating_temperature', default=1.0, type=float,
-                   help='Initial gating temperature for softmax (default: 1.0)')

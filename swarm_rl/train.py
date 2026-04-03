@@ -84,6 +84,24 @@ def parse_swarm_cfg(argv=None, evaluation=False):
     return final_cfg
 
 
+def maybe_enable_adaptive_skill_learner(cfg):
+    """
+    Enable the custom learner only for Adaptive Skill runs that use diversity loss.
+
+    Sample Factory in this version instantiates Learner directly inside LearnerWorker,
+    so we patch that single construction point instead of forking the full runner.
+    """
+    use_adaptive_skill = getattr(cfg, 'quads_use_adaptive_skill', False)
+    use_diversity_loss = getattr(cfg, 'quads_use_diversity_loss', False)
+    if not (use_adaptive_skill and use_diversity_loss):
+        return
+
+    from sample_factory.algo.learning import learner_worker as sf_learner_worker
+    from swarm_rl.adaptive_skill.learner import AdaptiveSkillLearner
+
+    sf_learner_worker.Learner = AdaptiveSkillLearner
+
+
 def main():
     """Script entry point."""
     # Parse config first to check if CBF is enabled
@@ -94,9 +112,7 @@ def main():
     use_adaptive_skill = getattr(cfg, 'quads_use_adaptive_skill', False)
 
     register_swarm_components(use_cbf=use_cbf, use_adaptive_skill=use_adaptive_skill)
-
-    # 注意：移除了 diversity_loss 后，不需要自定义 Learner
-    # Sample Factory 默认的 Learner 就可以正常训练 Adaptive Skill
+    maybe_enable_adaptive_skill_learner(cfg)
 
     # Run training
     status = run_rl(cfg)
