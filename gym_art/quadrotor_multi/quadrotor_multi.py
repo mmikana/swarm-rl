@@ -347,7 +347,10 @@ class QuadrotorEnvMulti(gym.Env):
         # Scenario reset
         if self.use_obstacles:
             self.obstacles = MultiObstacles(obstacle_size=self.obst_size, quad_radius=self.quad_arm)
-            self.obst_map, obst_pos_arr, cell_centers = self.obst_generation_given_density()
+            if hasattr(self.scenario, "generate_obstacles"):
+                self.obst_map, obst_pos_arr, cell_centers = self.scenario.generate_obstacles(self.obst_spawn_area)
+            else:
+                self.obst_map, obst_pos_arr, cell_centers = self.obst_generation_given_density()
             self.scenario.reset(obst_map=self.obst_map, cell_centers=cell_centers)
         else:
             self.scenario.reset()

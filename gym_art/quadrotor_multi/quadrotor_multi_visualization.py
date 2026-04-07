@@ -16,6 +16,7 @@ class GlobalCamera(object):
         self.center = np.array([0., 0., 2.])
 
     def reset(self, view_dist=2.0, center=np.array([0., 0., 2.])):
+        self.radius = view_dist
         self.center = center
 
     def step(self, center=np.array([0., 0., 2.])):
@@ -33,20 +34,19 @@ class TopDownCamera(object):
         self.radius = view_dist
         self.theta = np.pi / 2
         self.phi = 0.0
-        self.center = np.array([0., 0., 15.])
+        self.center = np.array([0., 0., 0.])
 
-    def reset(self, view_dist=2.0, center=np.array([0., 0., 5.])):
-        self.center = np.array([0., 0., 15.])
-        #self.center = center
+    def reset(self, view_dist=2.0, center=np.array([0., 0., 0.])):
+        self.radius = view_dist
+        self.center = np.array([center[0], center[1], 0.0])
 
     def step(self, center=np.array([0., 0., 2.])):
         pass
 
     def look_at(self):
         up = npa(0, 1, 0)
-        eye = self.center  # pattern center
-        center = self.center - np.array([0, 0, 2])
-        center = (center/np.linalg.norm(center)) * self.radius
+        eye = self.center + np.array([0.0, 0.0, self.radius])
+        center = self.center
         return eye, center, up
 
 class CornerCamera(object):
@@ -154,9 +154,9 @@ class Quadrotor3DSceneMulti:
         elif self.viewpoint == 'side':
             self.chase_cam = SideCamera(view_dist=self.diameter * 15)
         elif self.viewpoint == 'global':
-            self.chase_cam = GlobalCamera(view_dist=2.5)
+            self.chase_cam = GlobalCamera(view_dist=self._overview_view_dist('global'))
         elif self.viewpoint == 'topdown':
-            self.chase_cam = TopDownCamera(view_dist=2.5)
+            self.chase_cam = TopDownCamera(view_dist=self._overview_view_dist('topdown'))
         elif self.viewpoint == 'topdownfollow':
             self.chase_cam = TopDownFollowCamera(view_dist=2.5)
         elif self.viewpoint[:-1] == 'corner':
@@ -205,6 +205,15 @@ class Quadrotor3DSceneMulti:
             self.goal_diameter = self.goal_forced_diameter
         else:
             self.goal_diameter = self.diameter
+
+    def _overview_center(self):
+        return np.array([0.0, 0.0, self.room_dims[2] / 2.0])
+
+    def _overview_view_dist(self, viewpoint):
+        span_xy = max(self.room_dims[0], self.room_dims[1])
+        if viewpoint == 'topdown':
+            return max(self.room_dims[2] + 2.0, 1.35 * span_xy)
+        return max(4.0, 1.3 * np.linalg.norm(np.array(self.room_dims)))
 
     def update_env(self, room_dims):
         self.room_dims = room_dims
@@ -359,9 +368,16 @@ class Quadrotor3DSceneMulti:
         self.path_store = [[] for _ in range(self.num_agents)]
 
         if self.viewpoint == 'global':
-            goal = np.mean(goals, axis=0)
-            self.chase_cam.reset(view_dist=2.5, center=goal)
-        elif self.viewpoint[:-1] == 'corner' or self.viewpoint == 'topdown':
+            self.chase_cam.reset(
+                view_dist=self._overview_view_dist('global'),
+                center=self._overview_center(),
+            )
+        elif self.viewpoint == 'topdown':
+            self.chase_cam.reset(
+                view_dist=self._overview_view_dist('topdown'),
+                center=self._overview_center(),
+            )
+        elif self.viewpoint[:-1] == 'corner':
             self.chase_cam.reset()
         else:
             goal = goals[self.camera_drone_index]  # TODO: make a camera that can look at all drones
@@ -538,9 +554,11 @@ class Quadrotor3DSceneMulti:
             return
         if self.keys[key.G]:
             self.viewpoint = 'global'
-            self.chase_cam = GlobalCamera(view_dist=2.5)
-            goal = np.mean(self.goals, axis=0)
-            self.chase_cam.reset(view_dist=2.5, center=goal)
+            self.chase_cam = GlobalCamera(view_dist=self._overview_view_dist('global'))
+            self.chase_cam.reset(
+                view_dist=self._overview_view_dist('global'),
+                center=self._overview_center(),
+            )
 
         # if not isinstance(self.chase_cam, GlobalCamera):
         #     return
