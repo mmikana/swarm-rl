@@ -6,7 +6,7 @@ CBF 集成到 Sample Factory 训练指南
 2. 使用新的 QuadActorCriticWithDistanceCBF（基于 DistanceAwareCBFLayer）
 """
 
-# ============ 方式 1：使用现有 RCBF 模型 ============
+# ============ 方式 1：使用现有 CBF 模型 ============
 
 # 训练命令：
 # python -m sample_factory.launcher.run \

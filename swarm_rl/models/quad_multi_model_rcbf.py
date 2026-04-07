@@ -1,146 +1,172 @@
 """
-QuadActorCriticWithCBF - 集成CBF安全层的Actor-Critic模型
-
-支持两种架构:
-1. QuadActorCriticWithCBF: 继承 ActorCriticSharedWeights (共享权重)
-2. QuadActorCriticWithCBFSeparate: 继承 ActorCriticSeparateWeights (独立权重)
+Quad actor-critic variants with a differentiable CBF layer.
 """
 
-import torch
-import numpy as np
 from typing import Dict
+
+import numpy as np
+import torch
 from torch import Tensor
 
-from sample_factory.model.actor_critic import ActorCriticSharedWeights, ActorCriticSeparateWeights
 from sample_factory.algo.utils.tensor_dict import TensorDict
+from sample_factory.model.actor_critic import ActorCriticSeparateWeights, ActorCriticSharedWeights
 from swarm_rl.cbf.cbf_layer import DistanceAwareCBFLayer
 
 
-class QuadActorCriticWithCBF(ActorCriticSharedWeights):
-    """
-    自定义 Actor-Critic 模型，集成 CBF-QP 安全层
+def _get_flat_obs_dim(obs_space) -> int:
+    obs_subspace = obs_space.spaces["obs"] if hasattr(obs_space, "spaces") else obs_space
+    return int(np.prod(obs_subspace.shape))
 
-    设计要点：
-    1. 继承 ActorCriticSharedWeights，复用所有基础组件
-    2. 只覆写 forward() 和 forward_tail()，添加 CBF-QP 层
-    3. 通过 cfg.quads_use_cbf 控制是否启用CBF
-    4. 训练时：log_prob 基于 u_rl，但环境执行 u_safe
-    5. 推理时：直接使用 u_safe
-    """
 
-    def __init__(self, model_factory, obs_space, action_space, cfg):
-        # CBF 配置检查（在调用基类之前）
-        use_cbf = getattr(cfg, 'quads_use_cbf', False)
-        use_obstacles = getattr(cfg, 'quads_use_obstacles', False)
-        
+def _extract_nominal_action(action_distribution, sample_actions: bool) -> tuple[Tensor, Tensor | None]:
+    if sample_actions:
+        raw_actions = action_distribution.sample()
+        log_prob_actions = action_distribution.log_prob(raw_actions)
+    else:
+        raw_actions = getattr(action_distribution, "means", action_distribution.mean)
+        log_prob_actions = None
+
+    return raw_actions, log_prob_actions
+
+
+class _CBFModelMixin:
+    def _validate_cbf_requirements(self, cfg) -> None:
+        use_cbf = getattr(cfg, "quads_use_cbf", False)
+        use_obstacles = getattr(cfg, "quads_use_obstacles", False)
+
         if use_cbf and not use_obstacles:
             raise ValueError(
-                "CBF requires obstacles to be enabled! "
-                "Please add --quads_use_obstacles=True to your training command.\n"
-                "\nExample:\n"
-                "  python -m swarm_rl.train --algo=APPO --env=quadrotor_multi \\\n"
-                "      --quads_use_cbf=True --quads_use_obstacles=True \\\n"
-                "      --train_for_env_steps=1000"
+                "CBF requires obstacles to be enabled. Use --quads_use_obstacles=True when --quads_use_cbf=True."
             )
-        
-        # 调用基类初始化
-        super().__init__(model_factory, obs_space, action_space, cfg)
-
-        # CBF 开关和参数
-        self.use_cbf = use_cbf
-
-        if self.use_cbf:
-            # 验证观测空间包含 SDF（9 维）
-            # 从cfg计算观测维度,而不是从obs_space
-            from gym_art.quadrotor_multi.quad_utils import QUADS_OBS_REPR, QUADS_NEIGHBOR_OBS_TYPE
-
-            self.self_obs_dim = QUADS_OBS_REPR[cfg.quads_obs_repr]
-            self.neighbor_obs_dim = QUADS_NEIGHBOR_OBS_TYPE[cfg.quads_neighbor_obs_type]
-
-            if cfg.quads_neighbor_visible_num == -1:
-                self.num_neighbors = cfg.quads_num_agents - 1
-            else:
-                self.num_neighbors = cfg.quads_neighbor_visible_num
-
-            self.all_neighbor_obs_dim = self.neighbor_obs_dim * self.num_neighbors
-
-            # 计算总观测维度
-            obs_dim = self.self_obs_dim + self.all_neighbor_obs_dim + 9  # +9 for SDF
-
-            if obs_dim < self.self_obs_dim + 9:
-                raise ValueError(
-                    f"Observation dimension ({obs_dim}) is too small for CBF. "
-                    f"CBF requires at least {self.self_obs_dim + 9} dimensions for SDF observations."
-                )
-
-            # 创建 CBF-QP 层 (使用距离感知姿态屏障函数)
-            self.cbf_layer = DistanceAwareCBFLayer(
-                alpha_cbf=getattr(cfg, 'quads_cbf_alpha', 1.0),
-                k=getattr(cfg, 'quads_cbf_k', 2.0),
-                sigma=getattr(cfg, 'quads_cbf_sigma', 0.1),
+        if use_cbf and getattr(cfg, "normalize_input", False):
+            raise ValueError(
+                "CBF requires raw physical observations, but normalize_input=True would feed normalized "
+                "velocities, rotations, and SDF values into the constraint. Use --normalize_input=False."
             )
 
-            # 验证 SDF 观测位置
-            expected_sdf_start = self.self_obs_dim + self.all_neighbor_obs_dim
-            expected_total_dim = expected_sdf_start + 9
-            if obs_dim != expected_total_dim:
-                print(f"Warning: Observation dimension mismatch. "
-                      f"Expected {expected_total_dim} (self:{self.self_obs_dim} + "
-                      f"neighbors:{self.all_neighbor_obs_dim} + sdf:9), got {obs_dim}. "
-                      f"CBF may not work correctly.")
+    def _init_cbf_support(self, obs_space, cfg) -> None:
+        self.use_cbf = getattr(cfg, "quads_use_cbf", False)
 
-    def _extract_state_from_obs(self, obs):
-        """
-        从观测中提取状态信息（用于CBF约束计算）
+        self.last_cbf_projection_loss = None
+        self.last_cbf_violation_loss = None
+        self.last_cbf_action_delta = None
+        self.last_cbf_intervention_rate = None
+        self.last_cbf_margin = None
+        self.last_cbf_safe_violation = None
+        self.last_cbf_qp_failure_rate = None
 
-        观测结构：[pos_rel(3), vel(3), rot(9), omega(3), ...]
+        if not self.use_cbf:
+            return
 
-        Args:
-            obs: (batch_size, obs_dim) tensor
+        from gym_art.quadrotor_multi.quad_utils import QUADS_NEIGHBOR_OBS_TYPE, QUADS_OBS_REPR
 
-        Returns:
-            dict with 'vel', 'R' (旋转矩阵)
-        """
-        # 提取速度 vel (index 3:6)
+        self.self_obs_dim = QUADS_OBS_REPR[cfg.quads_obs_repr]
+        self.neighbor_obs_dim = QUADS_NEIGHBOR_OBS_TYPE[cfg.quads_neighbor_obs_type]
+
+        if cfg.quads_neighbor_visible_num == -1:
+            self.num_neighbors = cfg.quads_num_agents - 1
+        else:
+            self.num_neighbors = cfg.quads_neighbor_visible_num
+
+        self.all_neighbor_obs_dim = self.neighbor_obs_dim * self.num_neighbors
+
+        obs_dim = _get_flat_obs_dim(obs_space)
+        expected_obs_dim = self.self_obs_dim + self.all_neighbor_obs_dim + 9
+        if obs_dim < expected_obs_dim:
+            raise ValueError(
+                f"Observation dimension ({obs_dim}) is too small for CBF. "
+                f"CBF requires at least {expected_obs_dim} dimensions for self/neighbor/SDF observations."
+            )
+
+        self.cbf_layer = DistanceAwareCBFLayer(
+            alpha_cbf=getattr(cfg, "quads_cbf_alpha", 1.0),
+            k=getattr(cfg, "quads_cbf_k", 2.0),
+            sigma=getattr(cfg, "quads_cbf_sigma", 0.1),
+        )
+
+        expected_total_dim = self.self_obs_dim + self.all_neighbor_obs_dim + 9
+        if obs_dim != expected_total_dim:
+            print(
+                "Warning: Observation dimension mismatch. "
+                f"Expected {expected_total_dim} (self:{self.self_obs_dim} + "
+                f"neighbors:{self.all_neighbor_obs_dim} + sdf:9), got {obs_dim}. "
+                "CBF may not work correctly."
+            )
+
+    @staticmethod
+    def _extract_state_from_obs(obs: Tensor) -> Dict[str, Tensor]:
         vel = obs[:, 3:6]
-
-        # 提取旋转矩阵 rot (index 6:15)
         rot_flat = obs[:, 6:15]
         R = rot_flat.reshape(-1, 3, 3)
+        return {"vel": vel, "R": R}
 
-        return {'vel': vel, 'R': R}
-
-    def _extract_sdf_from_obs(self, obs):
-        """
-        从观测中提取 SDF 信息
-
-        观测结构：[self_obs, neighbor_obs, obstacle_obs(SDF 9维)]
-
-        Args:
-            obs: (batch_size, obs_dim) tensor
-
-        Returns:
-            sdf_obs: (batch_size, 9) tensor
-        """
-        # SDF 在观测的最后 9 维
+    def _extract_sdf_from_obs(self, obs: Tensor) -> Tensor:
         sdf_start = self.self_obs_dim + self.all_neighbor_obs_dim
-        sdf_obs = obs[:, sdf_start:sdf_start + 9]
-        return sdf_obs
+        return obs[:, sdf_start : sdf_start + 9]
+
+    def _resolve_cbf_obs(self, obs: Tensor | None) -> Tensor | None:
+        if obs is not None:
+            return obs
+        return getattr(self, "_cbf_forward_obs", None)
+
+    def _reset_cbf_cache(self, reference: Tensor) -> None:
+        zero = reference.new_zeros(())
+        self.last_cbf_projection_loss = zero
+        self.last_cbf_violation_loss = zero
+        self.last_cbf_action_delta = zero
+        self.last_cbf_intervention_rate = zero
+        self.last_cbf_margin = zero
+        self.last_cbf_safe_violation = zero
+        self.last_cbf_qp_failure_rate = zero
+
+    def _apply_cbf(self, nominal_actions: Tensor, obs: Tensor | None) -> tuple[Tensor, Tensor]:
+        cbf_input_actions = torch.clamp(nominal_actions, min=-1.0, max=1.0)
+        self._reset_cbf_cache(cbf_input_actions)
+
+        if not self.use_cbf:
+            return nominal_actions, cbf_input_actions
+
+        obs = self._resolve_cbf_obs(obs)
+        if obs is None:
+            return nominal_actions, cbf_input_actions
+
+        state = self._extract_state_from_obs(obs)
+        sdf_obs = self._extract_sdf_from_obs(obs)
+        safe_actions, cbf_info = self.cbf_layer.project_with_info(cbf_input_actions, state, sdf_obs)
+
+        omega_delta = safe_actions[:, 1:4] - cbf_input_actions[:, 1:4]
+        self.last_cbf_projection_loss = omega_delta.square().sum(dim=1).mean()
+        self.last_cbf_violation_loss = cbf_info["violation_nominal"].square().mean()
+        self.last_cbf_action_delta = omega_delta.abs().mean()
+        self.last_cbf_intervention_rate = cbf_info["active_mask"].float().mean()
+        self.last_cbf_margin = cbf_info["margin_nominal"].mean()
+        self.last_cbf_safe_violation = cbf_info["violation_safe"].mean()
+        self.last_cbf_qp_failure_rate = cbf_info["qp_failed"].to(dtype=cbf_input_actions.dtype)
+
+        return nominal_actions, torch.clamp(safe_actions, min=-1.0, max=1.0)
+
+    def summaries(self) -> Dict:
+        stats = super().summaries()
+        if not self.use_cbf or self.last_cbf_projection_loss is None:
+            return stats
+
+        stats["cbf/projection_loss"] = self.last_cbf_projection_loss
+        stats["cbf/violation_loss"] = self.last_cbf_violation_loss
+        stats["cbf/action_delta_mean"] = self.last_cbf_action_delta
+        stats["cbf/intervention_rate"] = self.last_cbf_intervention_rate
+        stats["cbf/nominal_margin_mean"] = self.last_cbf_margin
+        stats["cbf/safe_violation_mean"] = self.last_cbf_safe_violation
+        stats["cbf/qp_failure_rate"] = self.last_cbf_qp_failure_rate
+        return stats
+
+
+class QuadActorCriticWithCBF(_CBFModelMixin, ActorCriticSharedWeights):
+    def __init__(self, model_factory, obs_space, action_space, cfg):
+        self._validate_cbf_requirements(cfg)
+        super().__init__(model_factory, obs_space, action_space, cfg)
+        self._init_cbf_support(obs_space, cfg)
 
     def forward_tail(self, core_output, values_only: bool, sample_actions: bool, obs=None) -> TensorDict:
-        """
-        覆写 forward_tail()，在采样动作后添加 CBF-QP 层
-
-        Args:
-            core_output: encoder + core 的输出
-            values_only: 是否只计算 value
-            sample_actions: 是否采样动作
-            obs: 原始观测（用于提取状态和SDF信息）
-
-        Returns:
-            TensorDict with 'values', 'actions', 'action_logits', 'log_prob_actions'
-        """
-        # 1. Decoder 和 Critic（复用基类）
         decoder_output = self.decoder(core_output)
         values = self.critic_linear(decoder_output).squeeze()
 
@@ -148,174 +174,38 @@ class QuadActorCriticWithCBF(ActorCriticSharedWeights):
         if values_only:
             return result
 
-        # 2. Policy 输出 action_logits（复用基类）
-        action_distribution_params, self.last_action_distribution = \
-            self.action_parameterization(decoder_output)
+        action_distribution_params, self.last_action_distribution = self.action_parameterization(decoder_output)
         result["action_logits"] = action_distribution_params
 
-        # 3. 采样动作 u_rl（标称控制）
-        if sample_actions:
-            # 使用基类方法采样
-            actions = self.last_action_distribution.sample()
-            # ⚠️ 关键修复：确保动作被严格约束到 [-1, 1]
-            # 这对 CBF-QP 层的输入有效性至关重要
-            # Sample Factory 的 tanh 可能在边界处不够精确
-            actions = torch.clamp(actions, min=-1.0, max=1.0)
-            log_prob_actions = self.last_action_distribution.log_prob(actions)
-            u_rl = actions
-        else:
-            # 推理时使用 mean
-            u_rl = action_distribution_params
-            # 推理时也要约束
-            u_rl = torch.clamp(u_rl, min=-1.0, max=1.0)
-            log_prob_actions = None
-            actions = u_rl
+        nominal_actions, log_prob_actions = _extract_nominal_action(self.last_action_distribution, sample_actions)
+        nominal_actions, env_actions = self._apply_cbf(nominal_actions, obs)
 
-        # 4. CBF-QP 层（如果启用）
-        if self.use_cbf and obs is not None:
-            # 提取状态和 SDF
-            state = self._extract_state_from_obs(obs)
-            sdf_obs = self._extract_sdf_from_obs(obs)
-
-            # 调用 CBF-QP 层计算安全动作
-            # DistanceAwareCBFLayer 签名: forward(rl_output, state, sdf_obs)
-            try:
-                u_final = self.cbf_layer(u_rl, state, sdf_obs)
-            except Exception as e:
-                # 如果 CBF 失败，回退到原始动作
-                print(f"Warning: CBF-QP failed: {e}, using u_rl")
-                u_final = u_rl
-
-            # 记录 CBF 信息（用于调试和分析）
-            result["u_rl"] = u_rl
-            result["u_safe"] = u_final
-        else:
-            u_final = u_rl
-
-        # 5. 输出最终动作
-        # 注意：log_prob 是基于 u_rl 计算的（APPO-CBF 的关键）
-        result["actions"] = u_final
+        result["actions"] = nominal_actions
+        result["env_actions"] = env_actions
         if log_prob_actions is not None:
             result["log_prob_actions"] = log_prob_actions
 
         return result
 
     def forward(self, normalized_obs_dict, rnn_states, values_only=False) -> TensorDict:
-        """
-        覆写 forward()，传递原始观测给 forward_tail()
-
-        Args:
-            normalized_obs_dict: dict with 'obs' key
-            rnn_states: RNN 状态
-            values_only: 是否只计算 value
-
-        Returns:
-            TensorDict
-        """
-        # 1. Encoder
         x = self.forward_head(normalized_obs_dict)
-
-        # 2. Core (RNN)
         x, new_rnn_states = self.forward_core(x, rnn_states)
 
-        # 3. Decoder + Policy + CBF (传递原始观测)
-        obs = normalized_obs_dict.get('obs', None)
+        obs = normalized_obs_dict.get("obs", None)
         result = self.forward_tail(x, values_only, sample_actions=True, obs=obs)
         result["new_rnn_states"] = new_rnn_states
-
         return result
 
 
-class QuadActorCriticWithCBFSeparate(ActorCriticSeparateWeights):
-    """
-    自定义 Actor-Critic 模型 (Separate Weights)，集成 CBF-QP 安全层
-
-    设计要点：
-    1. 继承 ActorCriticSeparateWeights，actor和critic使用独立的encoder/core
-    2. 只覆写 forward_tail()，在actor输出后添加 CBF-QP 层
-    3. CBF层的初始化和状态提取逻辑与 QuadActorCriticWithCBF 相同
-    """
-
+class QuadActorCriticWithCBFSeparate(_CBFModelMixin, ActorCriticSeparateWeights):
     def __init__(self, model_factory, obs_space, action_space, cfg):
-        # CBF 配置检查（在调用基类之前）
-        use_cbf = getattr(cfg, 'quads_use_cbf', False)
-        use_obstacles = getattr(cfg, 'quads_use_obstacles', False)
-
-        if use_cbf and not use_obstacles:
-            raise ValueError(
-                "CBF requires obstacles to be enabled! "
-                "Please add --quads_use_obstacles=True to your training command."
-            )
-
-        # 调用基类初始化
+        self._validate_cbf_requirements(cfg)
         super().__init__(model_factory, obs_space, action_space, cfg)
-
-        # CBF 开关和参数
-        self.use_cbf = use_cbf
-
-        if self.use_cbf:
-            # 验证观测空间包含 SDF（9 维）
-            # 从cfg计算观测维度,而不是从obs_space
-            from gym_art.quadrotor_multi.quad_utils import QUADS_OBS_REPR, QUADS_NEIGHBOR_OBS_TYPE
-
-            self.self_obs_dim = QUADS_OBS_REPR[cfg.quads_obs_repr]
-            self.neighbor_obs_dim = QUADS_NEIGHBOR_OBS_TYPE[cfg.quads_neighbor_obs_type]
-
-            if cfg.quads_neighbor_visible_num == -1:
-                self.num_neighbors = cfg.quads_num_agents - 1
-            else:
-                self.num_neighbors = cfg.quads_neighbor_visible_num
-
-            self.all_neighbor_obs_dim = self.neighbor_obs_dim * self.num_neighbors
-
-            # 计算总观测维度
-            obs_dim = self.self_obs_dim + self.all_neighbor_obs_dim + 9  # +9 for SDF
-
-            if obs_dim < self.self_obs_dim + 9:
-                raise ValueError(
-                    f"Observation dimension ({obs_dim}) is too small for CBF. "
-                    f"CBF requires at least {self.self_obs_dim + 9} dimensions for SDF observations."
-                )
-
-            # 创建 CBF-QP 层 (使用距离感知姿态屏障函数)
-            self.cbf_layer = DistanceAwareCBFLayer(
-                alpha_cbf=getattr(cfg, 'quads_cbf_alpha', 1.0),
-                k=getattr(cfg, 'quads_cbf_k', 2.0),
-                sigma=getattr(cfg, 'quads_cbf_sigma', 0.1),
-            )
-
-            # 验证 SDF 观测位置
-            expected_sdf_start = self.self_obs_dim + self.all_neighbor_obs_dim
-            expected_total_dim = expected_sdf_start + 9
-            if obs_dim != expected_total_dim:
-                print(f"Warning: Observation dimension mismatch. "
-                      f"Expected {expected_total_dim} (self:{self.self_obs_dim} + "
-                      f"neighbors:{self.all_neighbor_obs_dim} + sdf:9), got {obs_dim}. "
-                      f"CBF may not work correctly.")
-
-    def _extract_state_from_obs(self, obs):
-        """从观测中提取状态信息（用于CBF约束计算）"""
-        vel = obs[:, 3:6]
-        rot_flat = obs[:, 6:15]
-        R = rot_flat.reshape(-1, 3, 3)
-        return {'vel': vel, 'R': R}
-
-    def _extract_sdf_from_obs(self, obs):
-        """从观测中提取 SDF 信息"""
-        sdf_start = self.self_obs_dim + self.all_neighbor_obs_dim
-        sdf_obs = obs[:, sdf_start:sdf_start + 9]
-        return sdf_obs
+        self._init_cbf_support(obs_space, cfg)
 
     def forward_tail(self, core_output, values_only: bool, sample_actions: bool, obs=None) -> TensorDict:
-        """
-        覆写 forward_tail()，在actor采样动作后添加 CBF-QP 层
-
-        注意：ActorCriticSeparateWeights 的 core_output 包含 [actor_core_output, critic_core_output]
-        """
-        # 1. 分离 actor 和 critic 的 core 输出
         core_outputs = core_output.chunk(len(self.cores), dim=1)
 
-        # 2. Critic 分支（与基类相同）
         critic_decoder_output = self.critic_decoder(core_outputs[1])
         values = self.critic_linear(critic_decoder_output).squeeze()
 
@@ -323,70 +213,25 @@ class QuadActorCriticWithCBFSeparate(ActorCriticSeparateWeights):
         if values_only:
             return result
 
-        # 3. Actor 分支：Policy 输出 action_logits
         actor_decoder_output = self.actor_decoder(core_outputs[0])
-        action_distribution_params, self.last_action_distribution = \
-            self.action_parameterization(actor_decoder_output)
+        action_distribution_params, self.last_action_distribution = self.action_parameterization(actor_decoder_output)
         result["action_logits"] = action_distribution_params
 
-        # 4. 采样动作 u_rl（标称控制）
-        if sample_actions:
-            actions = self.last_action_distribution.sample()
-            # ⚠️ 关键修复：确保动作被严格约束到 [-1, 1]
-            # 这对 CBF-QP 层的输入有效性至关重要
-            actions = torch.clamp(actions, min=-1.0, max=1.0)
-            log_prob_actions = self.last_action_distribution.log_prob(actions)
-            u_rl = actions
-        else:
-            # 推理时使用 mean
-            u_rl = action_distribution_params
-            # 推理时也要约束
-            u_rl = torch.clamp(u_rl, min=-1.0, max=1.0)
-            log_prob_actions = None
-            actions = u_rl
+        nominal_actions, log_prob_actions = _extract_nominal_action(self.last_action_distribution, sample_actions)
+        nominal_actions, env_actions = self._apply_cbf(nominal_actions, obs)
 
-        # 5. CBF-QP 层（如果启用）
-        if self.use_cbf and obs is not None:
-            # 提取状态和 SDF
-            state = self._extract_state_from_obs(obs)
-            sdf_obs = self._extract_sdf_from_obs(obs)
-
-            # 调用 CBF-QP 层计算安全动作
-            # DistanceAwareCBFLayer 签名: forward(rl_output, state, sdf_obs)
-            try:
-                u_final = self.cbf_layer(u_rl, state, sdf_obs)
-            except Exception as e:
-                # 如果 CBF 失败，回退到原始动作
-                print(f"Warning: CBF-QP failed: {e}, using u_rl")
-                u_final = u_rl
-
-            # 记录 CBF 信息
-            result["u_rl"] = u_rl
-            result["u_safe"] = u_final
-        else:
-            u_final = u_rl
-
-        # 6. 输出最终动作
-        # 注意：log_prob 是基于 u_rl 计算的
-        result["actions"] = u_final
+        result["actions"] = nominal_actions
+        result["env_actions"] = env_actions
         if log_prob_actions is not None:
             result["log_prob_actions"] = log_prob_actions
 
         return result
 
     def forward(self, normalized_obs_dict, rnn_states, values_only=False) -> TensorDict:
-        """
-        覆写 forward()，传递原始观测给 forward_tail()
-        """
-        # 1. Encoder (actor + critic)
         x = self.forward_head(normalized_obs_dict)
-
-        # 2. Core (RNN)
         x, new_rnn_states = self.forward_core(x, rnn_states)
 
-        # 3. Decoder + Policy + CBF (传递原始观测)
-        obs = normalized_obs_dict.get('obs', None)
+        obs = normalized_obs_dict.get("obs", None)
         result = self.forward_tail(x, values_only, sample_actions=True, obs=obs)
         result["new_rnn_states"] = new_rnn_states
-
         return result

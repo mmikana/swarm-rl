@@ -152,6 +152,10 @@ def add_quadrotors_env_args(env, parser):
                    help='Distance decay rate k in alpha(p)=exp(-k*p). Larger = faster decay')
     p.add_argument('--quads_cbf_sigma', default=0.1, type=float,
                    help='Safety buffer sigma (m). Prevents constraint violation at hovering')
+    p.add_argument('--quads_cbf_loss_weight', default=0.1, type=float,
+                   help='Weight for learner-side CBF regularization added to the policy loss')
+    p.add_argument('--quads_cbf_projection_loss_weight', default=0.25, type=float,
+                   help='Relative weight of the differentiable CBF projection loss inside the CBF regularizer')
 
     # ========== Adaptive Skill RL Parameters ==========
     # Adaptive Skill Toggle

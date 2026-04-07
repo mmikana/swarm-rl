@@ -9,13 +9,10 @@ from sample_factory.cfg.arguments import parse_full_cfg, parse_sf_args
 from sample_factory.envs.env_utils import register_env
 from sample_factory.train import run_rl
 
+from sample_factory.algo.learning.learner import Learner
 from swarm_rl.env_wrappers.quad_utils import make_quadrotor_env
 from swarm_rl.env_wrappers.quadrotor_params import add_quadrotors_env_args, quadrotors_override_defaults
 from swarm_rl.models.quad_multi_model import register_models
-
-# Global reference to CBF model class (for pickling)
-_CBF_MODEL_CLASS = None
-
 
 def make_actor_critic_with_cbf(cfg, obs_space, action_space):
     """
@@ -52,15 +49,10 @@ def register_swarm_components(use_cbf=False, use_adaptive_skill=False):
 
     # Register custom Actor-Critic if using CBF
     if use_cbf:
-        # Store reference for pickling
-        global _CBF_MODEL_CLASS
-
-        # Override the default Actor-Critic factory
         global_model_factory().make_actor_critic_func = make_actor_critic_with_cbf
 
     # Register custom Actor-Critic if using Adaptive Skill
     if use_adaptive_skill:
-        # Override the default Actor-Critic factory
         global_model_factory().make_actor_critic_func = make_actor_critic_with_adaptive_skill
 
 
@@ -84,22 +76,32 @@ def parse_swarm_cfg(argv=None, evaluation=False):
     return final_cfg
 
 
-def maybe_enable_adaptive_skill_learner(cfg):
+def maybe_enable_custom_learner(cfg):
     """
-    Enable the custom learner only for Adaptive Skill runs that use diversity loss.
+    Enable custom learner/runtime integrations only for the features that need them.
 
     Sample Factory in this version instantiates Learner directly inside LearnerWorker,
     so we patch that single construction point instead of forking the full runner.
     """
-    use_adaptive_skill = getattr(cfg, 'quads_use_adaptive_skill', False)
-    use_diversity_loss = getattr(cfg, 'quads_use_diversity_loss', False)
-    if not (use_adaptive_skill and use_diversity_loss):
-        return
-
     from sample_factory.algo.learning import learner_worker as sf_learner_worker
-    from swarm_rl.adaptive_skill.learner import AdaptiveSkillLearner
 
-    sf_learner_worker.Learner = AdaptiveSkillLearner
+    learner_cls = Learner
+
+    use_adaptive_skill = getattr(cfg, "quads_use_adaptive_skill", False)
+    use_diversity_loss = getattr(cfg, "quads_use_diversity_loss", False)
+    if use_adaptive_skill and use_diversity_loss:
+        from swarm_rl.adaptive_skill.learner import AdaptiveSkillLearner
+
+        learner_cls = AdaptiveSkillLearner
+
+    if getattr(cfg, "quads_use_cbf", False):
+        from swarm_rl.cbf.learner import get_cbf_learner_class
+        from swarm_rl.cbf.sample_factory_integration import enable_cbf_sample_factory_integration
+
+        enable_cbf_sample_factory_integration()
+        learner_cls = get_cbf_learner_class(learner_cls)
+
+    sf_learner_worker.Learner = learner_cls
 
 
 def main():
@@ -112,7 +114,7 @@ def main():
     use_adaptive_skill = getattr(cfg, 'quads_use_adaptive_skill', False)
 
     register_swarm_components(use_cbf=use_cbf, use_adaptive_skill=use_adaptive_skill)
-    maybe_enable_adaptive_skill_learner(cfg)
+    maybe_enable_custom_learner(cfg)
 
     # Run training
     status = run_rl(cfg)
