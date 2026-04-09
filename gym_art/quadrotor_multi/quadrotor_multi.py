@@ -7,7 +7,6 @@ import gymnasium as gym
 import numpy as np
 
 from gym_art.quadrotor_multi.aerodynamics.downwash import perform_downwash
-from gym_art.quadrotor_multi.collisions.obstacles import perform_collision_with_obstacle
 from gym_art.quadrotor_multi.collisions.quadrotors import calculate_collision_matrix, \
     calculate_drone_proximity_penalties, perform_collision_between_drones
 from gym_art.quadrotor_multi.collisions.room import perform_collision_with_wall, perform_collision_with_ceiling
@@ -198,6 +197,7 @@ class QuadrotorEnvMulti(gym.Env):
         # Log
         self.distance_to_goal = [[] for _ in range(len(self.envs))]
         self.reached_goal = [False for _ in range(len(self.envs))]
+        self.prev_guidance_distances = None
 
         # Log metric
         self.agent_col_agent = np.ones(self.num_agents)
@@ -404,6 +404,12 @@ class QuadrotorEnvMulti(gym.Env):
         self.agent_col_agent = np.ones(self.num_agents)
         self.agent_col_obst = np.ones(self.num_agents)
         self.reached_goal = [False for _ in range(len(self.envs))]
+        if hasattr(self.scenario, "get_guidance_distance"):
+            self.prev_guidance_distances = np.array(
+                [self.scenario.get_guidance_distance(self.pos[i, :]) for i in range(len(self.envs))], dtype=np.float32
+            )
+        else:
+            self.prev_guidance_distances = None
 
         # Rendering
         if self.quads_render:
@@ -417,7 +423,11 @@ class QuadrotorEnvMulti(gym.Env):
         obs, rewards, dones, infos = [], [], [], []
 
         for i, a in enumerate(actions):
-            self.envs[i].rew_coeff = self.rew_coeff
+            env_reward_coeff = self.rew_coeff
+            if self.prev_guidance_distances is not None:
+                env_reward_coeff = dict(self.rew_coeff)
+                env_reward_coeff["pos"] = 0.0
+            self.envs[i].rew_coeff = env_reward_coeff
 
             observation, reward, done, info = self.envs[i].step(a)
             obs.append(observation)
@@ -530,6 +540,23 @@ class QuadrotorEnvMulti(gym.Env):
 
         # Reward & Info
         for i in range(self.num_agents):
+            true_goal_distance = float(np.linalg.norm(self.scenario.goals[i] - self.pos[i, :]))
+            if self.prev_guidance_distances is not None:
+                curr_guidance_distance = self.scenario.get_guidance_distance(self.pos[i, :])
+                # Progress shaping already scales with the environment step through state transitions,
+                # so we keep it as a pure potential difference instead of multiplying by dt again.
+                guidance_progress_reward = self.rew_coeff["pos"] * (
+                    self.prev_guidance_distances[i] - curr_guidance_distance
+                )
+
+                rewards[i] += guidance_progress_reward
+                infos[i]["rewards"]["rew_main"] = guidance_progress_reward
+                infos[i]["rewards"]["rew_pos"] = 0.0
+                infos[i]["rewards"]["rew_nav_progress"] = guidance_progress_reward
+                infos[i]["rewards"]["rewraw_main"] = guidance_progress_reward
+                infos[i]["rewards"]["rewraw_pos"] = -true_goal_distance
+                infos[i]["rewards"]["rewraw_nav_progress"] = guidance_progress_reward
+
             rewards[i] += rew_collisions[i]
             rewards[i] += rew_proximity[i]
 
@@ -542,9 +569,9 @@ class QuadrotorEnvMulti(gym.Env):
                 infos[i]["rewards"]["rew_quadcol_obstacle"] = rew_collisions_obst_quad[i]
                 infos[i]["rewards"]["rewraw_quadcol_obstacle"] = rew_obst_quad_collisions_raw[i]
 
-            self.distance_to_goal[i].append(-infos[i]["rewards"]["rewraw_pos"])
+            self.distance_to_goal[i].append(true_goal_distance)
             if len(self.distance_to_goal[i]) >= 5 and \
-                    np.mean(self.distance_to_goal[i][-5:]) / self.envs[0].dt < self.scenario.approch_goal_metric \
+                    np.mean(self.distance_to_goal[i][-5:]) < self.scenario.approch_goal_metric \
                     and not self.reached_goal[i]:
                 self.reached_goal[i] = True
 
@@ -574,10 +601,10 @@ class QuadrotorEnvMulti(gym.Env):
                     self_state_update_flag = True
                     for val in self.curr_quad_col:
                         obstacle_id = quad_obst_pair[int(val)]
-                        obstacle_pos = self.obstacles.pos_arr[int(obstacle_id)]
-                        perform_collision_with_obstacle(drone_dyn=self.envs[int(val)].dynamics,
-                                                        obstacle_pos=obstacle_pos,
-                                                        obstacle_size=self.obst_size)
+                        self.obstacles.perform_collision_response(
+                            drone_dyn=self.envs[int(val)].dynamics,
+                            obstacle_id=int(obstacle_id),
+                        )
 
             # # 4) Room
             if len(wall_crash_list) > 0 or len(ceiling_crash_list) > 0:
@@ -597,6 +624,11 @@ class QuadrotorEnvMulti(gym.Env):
         for i in range(self.num_agents):
             self.pos[i, :] = self.envs[i].dynamics.pos
             self.vel[i, :] = self.envs[i].dynamics.vel
+
+        if self.prev_guidance_distances is not None:
+            self.prev_guidance_distances = np.array(
+                [self.scenario.get_guidance_distance(self.pos[i, :]) for i in range(self.num_agents)], dtype=np.float32
+            )
 
         if self_state_update_flag:
             obs = [e.state_vector(e) for e in self.envs]
@@ -649,18 +681,18 @@ class QuadrotorEnvMulti(gym.Env):
                         'num_collisions_final_5_s': self.collisions_final_5s,
                         f'{scenario_name}/num_collisions_final_5_s': self.collisions_final_5s,
 
-                        'distance_to_goal_1s': (1.0 / self.envs[0].dt) * np.mean(
+                        'distance_to_goal_1s': np.mean(
                             self.distance_to_goal[i, int(-1 * self.control_freq):]),
-                        'distance_to_goal_3s': (1.0 / self.envs[0].dt) * np.mean(
+                        'distance_to_goal_3s': np.mean(
                             self.distance_to_goal[i, int(-3 * self.control_freq):]),
-                        'distance_to_goal_5s': (1.0 / self.envs[0].dt) * np.mean(
+                        'distance_to_goal_5s': np.mean(
                             self.distance_to_goal[i, int(-5 * self.control_freq):]),
 
-                        f'{scenario_name}/distance_to_goal_1s': (1.0 / self.envs[0].dt) * np.mean(
+                        f'{scenario_name}/distance_to_goal_1s': np.mean(
                             self.distance_to_goal[i, int(-1 * self.control_freq):]),
-                        f'{scenario_name}/distance_to_goal_3s': (1.0 / self.envs[0].dt) * np.mean(
+                        f'{scenario_name}/distance_to_goal_3s': np.mean(
                             self.distance_to_goal[i, int(-3 * self.control_freq):]),
-                        f'{scenario_name}/distance_to_goal_5s': (1.0 / self.envs[0].dt) * np.mean(
+                        f'{scenario_name}/distance_to_goal_5s': np.mean(
                             self.distance_to_goal[i, int(-5 * self.control_freq):]),
                     }
 

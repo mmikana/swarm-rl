@@ -32,7 +32,7 @@ ADAPTIVE_SKILL_CLI = QUAD_BASELINE_CLI_8 + (
 
 # 实验定义
 _experiment = Experiment(
-    "test_new_scenario",
+    "new_scenario_baseline",
     ADAPTIVE_SKILL_CLI,
     _params.generate_params(randomize=False),
 )

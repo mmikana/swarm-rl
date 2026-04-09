@@ -20,6 +20,32 @@ def compute_col_norm_and_new_vel_obst(pos, vel, obstacle_pos):
     return vnew, collision_norm
 
 
+@njit
+def compute_col_norm_and_new_vel_box(pos, vel, obstacle_pos, obstacle_size_xy):
+    half_x = obstacle_size_xy[0] / 2.0
+    half_y = obstacle_size_xy[1] / 2.0
+
+    nearest_x = min(max(pos[0], obstacle_pos[0] - half_x), obstacle_pos[0] + half_x)
+    nearest_y = min(max(pos[1], obstacle_pos[1] - half_y), obstacle_pos[1] + half_y)
+    collision_norm = np.array([pos[0] - nearest_x, pos[1] - nearest_y, 0.0])
+    coll_norm_mag = np.linalg.norm(collision_norm)
+
+    if coll_norm_mag < EPS:
+        rel_x = pos[0] - obstacle_pos[0]
+        rel_y = pos[1] - obstacle_pos[1]
+        pen_x = half_x - abs(rel_x)
+        pen_y = half_y - abs(rel_y)
+        if pen_x <= pen_y:
+            collision_norm = np.array([1.0 if rel_x >= 0.0 else -1.0, 0.0, 0.0])
+        else:
+            collision_norm = np.array([0.0, 1.0 if rel_y >= 0.0 else -1.0, 0.0])
+    else:
+        collision_norm = collision_norm / coll_norm_mag
+
+    vnew = np.dot(vel, collision_norm)
+    return vnew, collision_norm
+
+
 def perform_collision_with_obstacle(drone_dyn, obstacle_pos, obstacle_size):
     # Vel noise has two different random components,
     # One that preserves momentum in opposite directions
@@ -46,5 +72,31 @@ def perform_collision_with_obstacle(drone_dyn, obstacle_pos, obstacle_size):
                                         vel_shift=new_vel - drone_dyn.vel + vel_noise)
 
     # Random forces for omega
+    new_omega = compute_new_omega(magn_scale=1.0)
+    drone_dyn.omega += new_omega
+
+
+def perform_collision_with_box_obstacle(drone_dyn, obstacle_pos, obstacle_size_xy):
+    vnew, collision_norm = compute_col_norm_and_new_vel_box(
+        drone_dyn.pos, drone_dyn.vel, obstacle_pos, obstacle_size_xy
+    )
+    vel_magn = np.linalg.norm(drone_dyn.vel)
+    new_vel = vel_magn * collision_norm
+
+    vel_noise = np.zeros(3)
+    for _ in range(3):
+        cons_rand_val = np.random.normal(loc=0, scale=0.1, size=3)
+        tmp_vel_noise = cons_rand_val + np.random.normal(loc=0, scale=0.05, size=3)
+        if np.dot(new_vel + tmp_vel_noise, collision_norm) > 0:
+            vel_noise = tmp_vel_noise
+            break
+
+    max_vel_magn = np.linalg.norm(drone_dyn.vel)
+    drone_dyn.vel = compute_new_vel(
+        max_vel_magn=max_vel_magn,
+        vel=drone_dyn.vel,
+        vel_shift=new_vel - drone_dyn.vel + vel_noise,
+    )
+
     new_omega = compute_new_omega(magn_scale=1.0)
     drone_dyn.omega += new_omega

@@ -11,6 +11,9 @@ class Scenario_o_skill_hybrid(Scenario_o_base):
         super().__init__(quads_mode, envs, num_agents, room_dims)
         self.approch_goal_metric = 1.0
         self.center_lane_x = None
+        self.guidance_distance_field = None
+        self.free_cell_centers = None
+        self.free_cell_guidance_distances = None
 
     def _cell_index(self, x_idx, y_idx, x_cells):
         return x_idx * self._y_cells + y_idx
@@ -108,6 +111,83 @@ class Scenario_o_skill_hybrid(Scenario_o_base):
 
         return False
 
+    def _compute_guidance_distance_field(self, obst_map, goal_x_idx, goal_y_idx):
+        x_cells, y_cells = obst_map.shape
+        guidance_distance_field = np.full((x_cells, y_cells), np.inf, dtype=np.float32)
+        if obst_map[goal_x_idx, goal_y_idx] != 0:
+            raise RuntimeError("Goal cell must remain traversable for guidance reward")
+
+        q = deque([(goal_x_idx, goal_y_idx)])
+        guidance_distance_field[goal_x_idx, goal_y_idx] = 0.0
+
+        while q:
+            x_idx, y_idx = q.popleft()
+            base_distance = guidance_distance_field[x_idx, y_idx] + 1.0
+            for dx, dy in ((1, 0), (-1, 0), (0, 1), (0, -1)):
+                nx, ny = x_idx + dx, y_idx + dy
+                if 0 <= nx < x_cells and 0 <= ny < y_cells and obst_map[nx, ny] == 0:
+                    if base_distance < guidance_distance_field[nx, ny]:
+                        guidance_distance_field[nx, ny] = base_distance
+                        q.append((nx, ny))
+
+        return guidance_distance_field
+
+    def _build_gate_box_items(self, obst_map, cell_centers, x_cells, gate_travel_rows, grid_size=1.0):
+        gate_items = []
+        for gate_travel_row in gate_travel_rows:
+            gate_row = self._grid_row(y_cells=self._y_cells, travel_row=gate_travel_row)
+            occupied_cols = np.where(obst_map[:, gate_row] == 1)[0]
+            if len(occupied_cols) == 0:
+                continue
+
+            run_start = occupied_cols[0]
+            run_end = occupied_cols[0]
+            for col_idx in occupied_cols[1:]:
+                if col_idx == run_end + 1:
+                    run_end = col_idx
+                    continue
+
+                gate_items.append(self._make_box_item(cell_centers, x_cells, gate_row, run_start, run_end, grid_size))
+                run_start = col_idx
+                run_end = col_idx
+
+            gate_items.append(self._make_box_item(cell_centers, x_cells, gate_row, run_start, run_end, grid_size))
+
+        return gate_items
+
+    def _make_box_item(self, cell_centers, x_cells, gate_row, run_start, run_end, grid_size):
+        left_center = self._center_from_cell(
+            cell_centers=cell_centers,
+            x_idx=run_start,
+            y_idx=gate_row,
+            x_cells=x_cells,
+            z_value=self.room_dims[2] / 2.0,
+        )
+        right_center = self._center_from_cell(
+            cell_centers=cell_centers,
+            x_idx=run_end,
+            y_idx=gate_row,
+            x_cells=x_cells,
+            z_value=self.room_dims[2] / 2.0,
+        )
+        center = np.array(
+            [
+                0.5 * (left_center[0] + right_center[0]),
+                left_center[1],
+                self.room_dims[2] / 2.0,
+            ],
+            dtype=np.float32,
+        )
+        size = np.array(
+            [
+                (run_end - run_start + 1) * grid_size,
+                grid_size,
+                self.room_dims[2],
+            ],
+            dtype=np.float32,
+        )
+        return {"type": "box", "center": center, "size": size}
+
     def generate_obstacles(self, obst_spawn_area):
         x_cells = int(obst_spawn_area[0])
         y_cells = int(obst_spawn_area[1])
@@ -145,18 +225,41 @@ class Scenario_o_skill_hybrid(Scenario_o_base):
         else:
             raise RuntimeError("Failed to generate a traversable o_skill_hybrid map")
 
-        obst_pos_arr = []
+        gate_grid_rows = {self._grid_row(y_cells, gate_travel_row) for gate_travel_row in gate_travel_rows}
+        obstacle_items = []
         for x_idx in range(x_cells):
             for y_idx in range(y_cells):
                 if obst_map[x_idx, y_idx] != 1:
                     continue
+                if y_idx in gate_grid_rows:
+                    continue
                 pos_x, pos_y = cell_centers[self._cell_index(x_idx, y_idx, x_cells)]
-                obst_pos_arr.append([pos_x, pos_y, self.room_dims[2] / 2.0])
+                obstacle_items.append([pos_x, pos_y, self.room_dims[2] / 2.0])
 
-        return obst_map, obst_pos_arr, cell_centers
+        obstacle_items.extend(
+            self._build_gate_box_items(
+                obst_map=obst_map,
+                cell_centers=cell_centers,
+                x_cells=x_cells,
+                gate_travel_rows=gate_travel_rows,
+                grid_size=1.0,
+            )
+        )
+
+        return obst_map, obstacle_items, cell_centers
 
     def step(self):
         return
+
+    def get_guidance_distance(self, pos):
+        if self.free_cell_centers is None or self.free_cell_guidance_distances is None:
+            return float(np.linalg.norm(self.end_point[:2] - pos[:2]) + abs(self.end_point[2] - pos[2]))
+
+        offsets = self.free_cell_centers - pos[:2]
+        candidate_distances = self.free_cell_guidance_distances + np.linalg.norm(offsets, axis=1)
+        guidance_xy_distance = float(np.min(candidate_distances))
+        guidance_z_distance = float(abs(self.end_point[2] - pos[2]))
+        return guidance_xy_distance + guidance_z_distance
 
     def reset(self, obst_map=None, cell_centers=None):
         self.obstacle_map = obst_map
@@ -174,6 +277,19 @@ class Scenario_o_skill_hybrid(Scenario_o_base):
         self.end_point = self._center_from_cell(
             cell_centers=self.cell_centers, x_idx=center_lane_x, y_idx=0, x_cells=x_cells, z_value=z_value
         )
+        self.guidance_distance_field = self._compute_guidance_distance_field(
+            obst_map=self.obstacle_map, goal_x_idx=center_lane_x, goal_y_idx=0
+        )
+
+        free_cells = np.argwhere(self.obstacle_map == 0)
+        self.free_cell_centers = np.zeros((len(free_cells), 2), dtype=np.float32)
+        self.free_cell_guidance_distances = np.zeros(len(free_cells), dtype=np.float32)
+        for idx, (x_idx, y_idx) in enumerate(free_cells):
+            cell_center = self._center_from_cell(
+                cell_centers=self.cell_centers, x_idx=int(x_idx), y_idx=int(y_idx), x_cells=x_cells, z_value=z_value
+            )
+            self.free_cell_centers[idx] = cell_center[:2]
+            self.free_cell_guidance_distances[idx] = self.guidance_distance_field[int(x_idx), int(y_idx)]
 
         self.update_formation_and_relate_param()
         self.spawn_points = np.array([copy.deepcopy(self.start_point) for _ in range(self.num_agents)])
