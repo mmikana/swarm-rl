@@ -13,6 +13,7 @@ from sample_factory.algo.learning.learner import Learner
 from swarm_rl.env_wrappers.quad_utils import make_quadrotor_env
 from swarm_rl.env_wrappers.quadrotor_params import add_quadrotors_env_args, quadrotors_override_defaults
 from swarm_rl.models.quad_multi_model import register_models
+from swarm_rl.sample_factory_gpu_compat import enable_sample_factory_gpu_compat
 
 def make_actor_critic_with_cbf(cfg, obs_space, action_space):
     """
@@ -108,6 +109,9 @@ def main():
     """Script entry point."""
     # Parse config first to check if CBF is enabled
     cfg = parse_swarm_cfg(evaluation=False)
+
+    if getattr(cfg, "device", None) == "gpu" and not getattr(cfg, "serial_mode", False):
+        enable_sample_factory_gpu_compat()
 
     # Register components (with or without CBF)
     use_cbf = getattr(cfg, 'quads_use_cbf', False)

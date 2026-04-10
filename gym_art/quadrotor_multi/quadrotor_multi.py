@@ -28,7 +28,7 @@ class QuadrotorEnvMulti(gym.Env):
                  use_obstacles, obst_density, obst_size, obst_spawn_area,
 
                  # Aerodynamics, Numba Speed Up, Scenarios, Room, Replay Buffer, Rendering
-                 use_downwash, use_numba, quads_mode, room_dims, use_replay_buffer, quads_view_mode,
+                 use_downwash, use_numba, quads_mode, guidance_type, room_dims, use_replay_buffer, quads_view_mode,
                  quads_render,
 
                  # Quadrotor Specific
@@ -134,8 +134,13 @@ class QuadrotorEnvMulti(gym.Env):
 
         # Scenarios
         self.quads_mode = quads_mode
+        self.guidance_type = guidance_type
         self.scenario = create_scenario(quads_mode=quads_mode, envs=self.envs, num_agents=num_agents,
                                         room_dims=room_dims)
+        if hasattr(self.scenario, "set_guidance_type"):
+            self.scenario.set_guidance_type(guidance_type)
+        else:
+            self.scenario.guidance_type = guidance_type
 
         # Collisions
         # # Collisions: Neighbors
@@ -404,7 +409,7 @@ class QuadrotorEnvMulti(gym.Env):
         self.agent_col_agent = np.ones(self.num_agents)
         self.agent_col_obst = np.ones(self.num_agents)
         self.reached_goal = [False for _ in range(len(self.envs))]
-        if hasattr(self.scenario, "get_guidance_distance"):
+        if getattr(self.scenario, "guidance_type", "none") != "none" and hasattr(self.scenario, "get_guidance_distance"):
             self.prev_guidance_distances = np.array(
                 [self.scenario.get_guidance_distance(self.pos[i, :]) for i in range(len(self.envs))], dtype=np.float32
             )
@@ -421,6 +426,7 @@ class QuadrotorEnvMulti(gym.Env):
 
     def step(self, actions):
         obs, rewards, dones, infos = [], [], [], []
+        prev_positions = np.copy(self.pos)
 
         for i, a in enumerate(actions):
             env_reward_coeff = self.rew_coeff
@@ -474,7 +480,10 @@ class QuadrotorEnvMulti(gym.Env):
         # 2) Collisions with obstacles
         if self.use_obstacles:
             rew_obst_quad_collisions_raw = np.zeros(self.num_agents)
-            obst_quad_col_matrix, quad_obst_pair = self.obstacles.collision_detection(pos_quads=self.pos)
+            obst_quad_col_matrix, quad_obst_pair = self.obstacles.collision_detection(
+                pos_quads=self.pos,
+                prev_pos_quads=prev_positions,
+            )
             # We assume drone can only collide with one obstacle at the same time.
             # Given this setting, in theory, the gap between obstacles should >= 0.1 (drone diameter: 0.46*2 = 0.92)
             self.curr_quad_col = np.setdiff1d(obst_quad_col_matrix, self.prev_obst_quad_collisions)

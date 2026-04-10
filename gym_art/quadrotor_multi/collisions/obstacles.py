@@ -98,5 +98,23 @@ def perform_collision_with_box_obstacle(drone_dyn, obstacle_pos, obstacle_size_x
         vel_shift=new_vel - drone_dyn.vel + vel_noise,
     )
 
+    # Project the drone center just outside the wall to avoid remaining inside the box after
+    # a discrete-time collision response. This reduces repeated wall tunneling.
+    half_x = obstacle_size_xy[0] / 2.0
+    half_y = obstacle_size_xy[1] / 2.0
+    clearance = 0.05
+    rel_x = drone_dyn.pos[0] - obstacle_pos[0]
+    rel_y = drone_dyn.pos[1] - obstacle_pos[1]
+
+    if abs(rel_x) <= half_x and abs(rel_y) <= half_y:
+        pen_x = half_x - abs(rel_x)
+        pen_y = half_y - abs(rel_y)
+        if pen_x <= pen_y:
+            sign_x = 1.0 if rel_x >= 0.0 else -1.0
+            drone_dyn.pos[0] = obstacle_pos[0] + sign_x * (half_x + clearance)
+        else:
+            sign_y = 1.0 if rel_y >= 0.0 else -1.0
+            drone_dyn.pos[1] = obstacle_pos[1] + sign_y * (half_y + clearance)
+
     new_omega = compute_new_omega(magn_scale=1.0)
     drone_dyn.omega += new_omega

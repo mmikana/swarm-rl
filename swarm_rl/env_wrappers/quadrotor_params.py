@@ -91,6 +91,9 @@ def add_quadrotors_env_args(env, parser):
     p.add_argument('--quads_obst_collision_reward', default=0.0, type=float,
                    help='Override default value for quadcol_bin_obst reward, which means collisions between quadrotor '
                         'and obstacles')
+    p.add_argument('--quads_guidance_type', default='none', type=str,
+                   choices=['none', 'global_bfs', 'local_bfs'],
+                   help='Topology-aware guidance mode for obstacle navigation reward')
 
     # Aerodynamics
     # # Downwash

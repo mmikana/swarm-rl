@@ -9,6 +9,7 @@ from gym_art.quadrotor_multi.obstacles.utils import (
     OBSTACLE_BOX,
     OBSTACLE_CYLINDER,
     collision_detection,
+    collision_detection_swept,
     get_surround_sdfs,
 )
 
@@ -94,14 +95,24 @@ class MultiObstacles:
 
         return obs
 
-    def collision_detection(self, pos_quads):
-        quad_collisions = collision_detection(
-            quad_poses=pos_quads[:, :2],
-            obst_poses=self.pos_arr[:, :2],
-            obstacle_types=self.obstacle_types,
-            obstacle_size_xy=self.obstacle_size_xy,
-            quad_radius=self.quad_radius,
-        )
+    def collision_detection(self, pos_quads, prev_pos_quads=None):
+        if prev_pos_quads is None:
+            quad_collisions = collision_detection(
+                quad_poses=pos_quads[:, :2],
+                obst_poses=self.pos_arr[:, :2],
+                obstacle_types=self.obstacle_types,
+                obstacle_size_xy=self.obstacle_size_xy,
+                quad_radius=self.quad_radius,
+            )
+        else:
+            quad_collisions = collision_detection_swept(
+                prev_quad_poses=prev_pos_quads[:, :2],
+                quad_poses=pos_quads[:, :2],
+                obst_poses=self.pos_arr[:, :2],
+                obstacle_types=self.obstacle_types,
+                obstacle_size_xy=self.obstacle_size_xy,
+                quad_radius=self.quad_radius,
+            )
 
         collided_quads_id = np.where(quad_collisions > -1)[0]
         collided_obstacles_id = quad_collisions[collided_quads_id]

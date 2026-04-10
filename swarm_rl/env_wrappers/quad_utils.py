@@ -49,6 +49,7 @@ def make_quadrotor_env_multi(cfg, render_mode=None, **kwargs):
         use_numba=cfg.quads_use_numba,
         # Scenarios
         quads_mode=cfg.quads_mode,
+        guidance_type=cfg.quads_guidance_type,
         # Room
         room_dims=cfg.quads_room_dims,
         # Replay Buffer

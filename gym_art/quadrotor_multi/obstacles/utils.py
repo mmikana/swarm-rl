@@ -77,6 +77,108 @@ def collision_detection(quad_poses, obst_poses, obstacle_types, obstacle_size_xy
 
 
 @njit
+def _segment_circle_collision(p0, p1, center, radius):
+    d = p1 - p0
+    a = np.dot(d, d)
+    if a < 1e-12:
+        rel = p0 - center
+        return np.dot(rel, rel) <= radius * radius
+
+    t = -np.dot(p0 - center, d) / a
+    if t < 0.0:
+        t = 0.0
+    elif t > 1.0:
+        t = 1.0
+    closest = p0 + t * d
+    rel = closest - center
+    return np.dot(rel, rel) <= radius * radius
+
+
+@njit
+def _segment_box_collision(p0, p1, center, half_x, half_y):
+    min_x = center[0] - half_x
+    max_x = center[0] + half_x
+    min_y = center[1] - half_y
+    max_y = center[1] + half_y
+
+    if min_x <= p0[0] <= max_x and min_y <= p0[1] <= max_y:
+        return True
+    if min_x <= p1[0] <= max_x and min_y <= p1[1] <= max_y:
+        return True
+
+    d = p1 - p0
+    t_min = 0.0
+    t_max = 1.0
+
+    if abs(d[0]) < 1e-12:
+        if p0[0] < min_x or p0[0] > max_x:
+            return False
+    else:
+        inv_dx = 1.0 / d[0]
+        tx1 = (min_x - p0[0]) * inv_dx
+        tx2 = (max_x - p0[0]) * inv_dx
+        if tx1 > tx2:
+            tx1, tx2 = tx2, tx1
+        if tx1 > t_min:
+            t_min = tx1
+        if tx2 < t_max:
+            t_max = tx2
+        if t_min > t_max:
+            return False
+
+    if abs(d[1]) < 1e-12:
+        if p0[1] < min_y or p0[1] > max_y:
+            return False
+    else:
+        inv_dy = 1.0 / d[1]
+        ty1 = (min_y - p0[1]) * inv_dy
+        ty2 = (max_y - p0[1]) * inv_dy
+        if ty1 > ty2:
+            ty1, ty2 = ty2, ty1
+        if ty1 > t_min:
+            t_min = ty1
+        if ty2 < t_max:
+            t_max = ty2
+        if t_min > t_max:
+            return False
+
+    return True
+
+
+@njit
+def collision_detection_swept(prev_quad_poses, quad_poses, obst_poses, obstacle_types, obstacle_size_xy, quad_radius):
+    quad_num = len(quad_poses)
+    quad_collisions = -1 * np.ones(quad_num)
+    for i in range(quad_num):
+        p0 = prev_quad_poses[i]
+        p1 = quad_poses[i]
+        for j, o_pos in enumerate(obst_poses):
+            dist_curr = obstacle_signed_distance(
+                point_xy=p1,
+                obstacle_center_xy=o_pos,
+                obstacle_type=obstacle_types[j],
+                obstacle_size_xy=obstacle_size_xy[j],
+            )
+            if dist_curr <= quad_radius:
+                quad_collisions[i] = j
+                break
+
+            if obstacle_types[j] == OBSTACLE_CYLINDER:
+                radius = obstacle_size_xy[j][0] / 2.0 + quad_radius
+                if _segment_circle_collision(p0=p0, p1=p1, center=o_pos, radius=radius):
+                    quad_collisions[i] = j
+                    break
+            else:
+                half_x = obstacle_size_xy[j][0] / 2.0 + quad_radius
+                half_y = obstacle_size_xy[j][1] / 2.0 + quad_radius
+                if _segment_box_collision(p0=p0, p1=p1, center=o_pos, half_x=half_x, half_y=half_y):
+                    quad_collisions[i] = j
+                    break
+
+    return quad_collisions
+
+
+@njit
 def get_cell_centers(obst_area_length, obst_area_width, grid_size=1.):
     count = 0
     i_len = obst_area_length / grid_size

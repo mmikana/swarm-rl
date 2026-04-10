@@ -172,6 +172,7 @@ class Quadrotor3DSceneMulti:
         self.obstacles = None
         if obstacles:
             self.obstacles = obstacles
+        self._obstacle_signature = None
 
         # Save parameters to help transfer from global camera to local camera
         self.goals = None
@@ -292,6 +293,9 @@ class Quadrotor3DSceneMulti:
         if self.obstacles:
             self.create_obstacles()
             bodies.extend(self.obstacle_transforms)
+            self._obstacle_signature = self._get_obstacle_signature(self.obstacles)
+        else:
+            self._obstacle_signature = None
 
         world = r3d.World(bodies)
         batch = r3d.Batch()
@@ -306,6 +310,29 @@ class Quadrotor3DSceneMulti:
         batch = r3d.Batch()
         world.build(batch)
         self.scene.batches.extend([batch])
+
+    @staticmethod
+    def _get_obstacle_signature(obstacles):
+        if obstacles is None:
+            return None
+
+        return (
+            tuple(np.asarray(obstacles.pos_arr).shape),
+            tuple(np.asarray(obstacles.obstacle_types).tolist()),
+            tuple(np.asarray(obstacles.obstacle_size_xyz).reshape(-1).tolist()),
+        )
+
+    def _sync_obstacle_geometry(self, obstacles):
+        if obstacles is None:
+            if self.obstacles is not None:
+                self.obstacles = None
+                self._make_scene()
+            return
+
+        new_signature = self._get_obstacle_signature(obstacles)
+        if new_signature != self._obstacle_signature:
+            self.obstacles = obstacles
+            self._make_scene()
 
     def create_obstacles(self):
         import gym_art.quadrotor_multi.rendering3d as r3d
@@ -328,7 +355,9 @@ class Quadrotor3DSceneMulti:
     def update_obstacles(self, obstacles):
         import gym_art.quadrotor_multi.rendering3d as r3d
 
-        if len(obstacles.pos_arr) == 1:
+        self._sync_obstacle_geometry(obstacles)
+
+        if obstacles is None or len(obstacles.pos_arr) == 0:
             return
 
         for i, g in enumerate(obstacles.pos_arr):
@@ -372,6 +401,7 @@ class Quadrotor3DSceneMulti:
     def reset(self, goals, dynamics, obstacles, collisions):
         self.goals = goals
         self.dynamics = dynamics
+        self._sync_obstacle_geometry(obstacles)
         self.vector_array = [[] for _ in range(self.num_agents)]
         self.path_store = [[] for _ in range(self.num_agents)]
 
