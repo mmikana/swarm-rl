@@ -21,8 +21,19 @@ class Scenario_o_skill_hybrid(Scenario_o_base):
         self.free_cell_guidance_distances = None
         self.free_cells = None
         self.local_guidance_window_cells = 3
+        self.local_target_hold_steps = 6
+        self.local_target_reached_cells = 1
+        self.local_targets = None
+        self.local_target_ages = None
+        self.local_target_fields = None
+        self.local_target_windows = None
+        self.local_last_anchor_cells = None
+        self.local_last_positions = None
+        self.local_last_guidance_values = None
         self._x_cells = None
         self._y_cells = None
+        self.nearest_valid_guidance_cells = None
+        self.agent_goal_fields = None
 
     def set_guidance_type(self, guidance_type):
         self.guidance_type = guidance_type
@@ -62,6 +73,121 @@ class Scenario_o_skill_hybrid(Scenario_o_base):
                     break
                 goal_lane = int(np.random.choice(candidates))
         return start_lane, goal_lane
+
+    def _build_multi_agent_spawn_points(self, x_cells, y_cells, z_value):
+        if self.num_agents == 1:
+            return np.array([copy.deepcopy(self.start_point)], dtype=np.float32)
+
+        anchor = np.array([int(self.start_lane_x), y_cells - 1], dtype=np.int32)
+        free_cells = np.argwhere(self.obstacle_map == 0)
+        if len(free_cells) < self.num_agents:
+            raise RuntimeError("Not enough free cells to place all agents")
+
+        def _candidate_key(cell):
+            x_idx, y_idx = int(cell[0]), int(cell[1])
+            manhattan = abs(x_idx - anchor[0]) + abs(y_idx - anchor[1])
+            lane_bias = abs(x_idx - int(self.start_lane_x))
+            depth_bias = y_cells - 1 - y_idx
+            return manhattan, lane_bias, depth_bias, np.random.random()
+
+        ranked_cells = sorted(free_cells.tolist(), key=_candidate_key)
+        selected_cells = []
+        for cell in ranked_cells:
+            x_idx, y_idx = int(cell[0]), int(cell[1])
+            keep = True
+            for sel_x, sel_y in selected_cells:
+                if abs(sel_x - x_idx) + abs(sel_y - y_idx) < 2:
+                    keep = False
+                    break
+            if keep:
+                selected_cells.append((x_idx, y_idx))
+            if len(selected_cells) >= self.num_agents:
+                break
+
+        if len(selected_cells) < self.num_agents:
+            selected_cells = [(int(cell[0]), int(cell[1])) for cell in ranked_cells[:self.num_agents]]
+
+        spawn_points = []
+        for x_idx, y_idx in selected_cells:
+            spawn_points.append(
+                self._center_from_cell(
+                    cell_centers=self.cell_centers,
+                    x_idx=x_idx,
+                    y_idx=y_idx,
+                    x_cells=x_cells,
+                    z_value=z_value,
+                )
+            )
+
+        return np.asarray(spawn_points, dtype=np.float32)
+
+    def _build_multi_agent_goals(self, x_cells, y_cells, z_value):
+        if self.num_agents == 1:
+            return np.array([copy.deepcopy(self.end_point)], dtype=np.float32)
+
+        anchor = np.array([int(self.goal_lane_x), 0], dtype=np.int32)
+        free_cells = np.argwhere(self.obstacle_map == 0)
+        if len(free_cells) < self.num_agents:
+            raise RuntimeError("Not enough free cells to place all goal points")
+
+        def _candidate_key(cell):
+            x_idx, y_idx = int(cell[0]), int(cell[1])
+            manhattan = abs(x_idx - anchor[0]) + abs(y_idx - anchor[1])
+            lane_bias = abs(x_idx - int(self.goal_lane_x))
+            depth_bias = y_idx
+            return manhattan, lane_bias, depth_bias, np.random.random()
+
+        ranked_cells = sorted(free_cells.tolist(), key=_candidate_key)
+        selected_cells = []
+        for cell in ranked_cells:
+            x_idx, y_idx = int(cell[0]), int(cell[1])
+            keep = True
+            for sel_x, sel_y in selected_cells:
+                if abs(sel_x - x_idx) + abs(sel_y - y_idx) < 2:
+                    keep = False
+                    break
+            if keep:
+                selected_cells.append((x_idx, y_idx))
+            if len(selected_cells) >= self.num_agents:
+                break
+
+        if len(selected_cells) < self.num_agents:
+            selected_cells = [(int(cell[0]), int(cell[1])) for cell in ranked_cells[:self.num_agents]]
+
+        goals = []
+        for x_idx, y_idx in selected_cells:
+            goals.append(
+                self._center_from_cell(
+                    cell_centers=self.cell_centers,
+                    x_idx=x_idx,
+                    y_idx=y_idx,
+                    x_cells=x_cells,
+                    z_value=z_value,
+                )
+            )
+
+        return np.asarray(goals, dtype=np.float32)
+
+    def _use_shared_goal(self):
+        return True
+
+    def _build_goals_and_guidance_fields(self, x_cells, y_cells, z_value):
+        if self._use_shared_goal():
+            goals = np.asarray([copy.deepcopy(self.end_point) for _ in range(self.num_agents)], dtype=np.float32)
+            return goals, None
+
+        goals = self._build_multi_agent_goals(x_cells=x_cells, y_cells=y_cells, z_value=z_value)
+        agent_goal_fields = []
+        for goal in goals:
+            goal_x_idx, goal_y_idx = self._position_to_grid_cell(goal)
+            agent_goal_fields.append(
+                self._compute_guidance_distance_field(
+                    obst_map=self.obstacle_map,
+                    goal_x_idx=goal_x_idx,
+                    goal_y_idx=goal_y_idx,
+                )
+            )
+        return goals, agent_goal_fields
 
     def _opening_center(self, opening_start, opening_width):
         return float(opening_start) + 0.5 * float(opening_width - 1)
@@ -274,37 +400,58 @@ class Scenario_o_skill_hybrid(Scenario_o_base):
 
     def _nearest_valid_guidance_cell(self, pos):
         x_idx, y_idx = self._position_to_grid_cell(pos)
-        if self.obstacle_map[x_idx, y_idx] == 0 and np.isfinite(self.guidance_distance_field[x_idx, y_idx]):
-            return int(x_idx), int(y_idx)
+        if self.nearest_valid_guidance_cells is None:
+            raise RuntimeError("Nearest valid guidance lookup table is not initialized")
+        anchor_x, anchor_y = self.nearest_valid_guidance_cells[x_idx, y_idx]
+        if anchor_x < 0 or anchor_y < 0:
+            raise RuntimeError("Failed to locate a valid guidance anchor cell")
+        return int(anchor_x), int(anchor_y)
 
-        best_cell = None
-        best_distance = np.inf
-        max_radius = max(self._x_cells, self._y_cells)
-        for radius in range(1, max_radius + 1):
-            x_min = max(0, x_idx - radius)
-            x_max = min(self._x_cells - 1, x_idx + radius)
-            y_min = max(0, y_idx - radius)
-            y_max = min(self._y_cells - 1, y_idx + radius)
+    def _build_nearest_valid_guidance_cells(self):
+        nearest = np.full((self._x_cells, self._y_cells, 2), -1, dtype=np.int32)
+        valid_cells = []
+        for x_idx in range(self._x_cells):
+            for y_idx in range(self._y_cells):
+                if self.obstacle_map[x_idx, y_idx] == 0 and np.isfinite(self.guidance_distance_field[x_idx, y_idx]):
+                    nearest[x_idx, y_idx] = (x_idx, y_idx)
+                    valid_cells.append((x_idx, y_idx))
 
-            for cand_x in range(x_min, x_max + 1):
-                for cand_y in range(y_min, y_max + 1):
-                    if self.obstacle_map[cand_x, cand_y] != 0:
-                        continue
-                    if not np.isfinite(self.guidance_distance_field[cand_x, cand_y]):
-                        continue
+        if not valid_cells:
+            raise RuntimeError("No valid guidance cells available to initialize lookup table")
+
+        for x_idx in range(self._x_cells):
+            for y_idx in range(self._y_cells):
+                if nearest[x_idx, y_idx, 0] >= 0:
+                    continue
+
+                best_cell = None
+                best_distance = np.inf
+                query_xy = self._cell_center_xy(x_idx, y_idx)
+                for cand_x, cand_y in valid_cells:
                     center_xy = self._cell_center_xy(cand_x, cand_y)
-                    distance = float(np.linalg.norm(center_xy - pos[:2]))
+                    distance = float(np.linalg.norm(center_xy - query_xy))
                     if distance < best_distance:
                         best_distance = distance
-                        best_cell = (int(cand_x), int(cand_y))
+                        best_cell = (cand_x, cand_y)
 
-            if best_cell is not None:
-                return best_cell
+                nearest[x_idx, y_idx] = best_cell
 
-        raise RuntimeError("Failed to locate a valid guidance anchor cell")
+        self.nearest_valid_guidance_cells = nearest
 
-    def _continuous_guidance_distance(self, pos, distance_field, x_min=0, y_min=0, candidate_radius=1):
-        anchor_x, anchor_y = self._nearest_valid_guidance_cell(pos)
+    def _continuous_guidance_distance(
+        self,
+        pos,
+        distance_field,
+        x_min=0,
+        y_min=0,
+        candidate_radius=1,
+        anchor_cell=None,
+        goal_z=None,
+    ):
+        if anchor_cell is None:
+            anchor_x, anchor_y = self._nearest_valid_guidance_cell(pos)
+        else:
+            anchor_x, anchor_y = int(anchor_cell[0]), int(anchor_cell[1])
         guidance_xy_distance = np.inf
 
         for dx in range(-candidate_radius, candidate_radius + 1):
@@ -333,17 +480,136 @@ class Scenario_o_skill_hybrid(Scenario_o_base):
         if not np.isfinite(guidance_xy_distance):
             center_xy = self._cell_center_xy(anchor_x, anchor_y)
             guidance_xy_distance = float(
-                self.guidance_distance_field[anchor_x, anchor_y] + np.linalg.norm(center_xy - pos[:2])
+                distance_field[anchor_x - x_min, anchor_y - y_min] + np.linalg.norm(center_xy - pos[:2])
             )
 
-        guidance_z_distance = float(abs(self.end_point[2] - pos[2]))
+        if goal_z is None:
+            goal_z = self.end_point[2]
+        guidance_z_distance = float(abs(goal_z - pos[2]))
         return guidance_xy_distance + guidance_z_distance
 
-    def _compute_local_guidance_distance(self, pos):
+    def _select_local_target_cell(self, local_reach_field, x_min, x_max, y_min, y_max, goal_xy, goal_lane_x, guidance_field):
+        best_boundary_candidate = None
+        best_inner_candidate = None
+        for x_idx in range(x_min, x_max + 1):
+            for y_idx in range(y_min, y_max + 1):
+                if self.obstacle_map[x_idx, y_idx] != 0:
+                    continue
+
+                local_reach_distance = local_reach_field[x_idx - x_min, y_idx - y_min]
+                if not np.isfinite(local_reach_distance):
+                    continue
+
+                global_distance = guidance_field[x_idx, y_idx]
+                if not np.isfinite(global_distance):
+                    continue
+
+                center_xy = self._cell_center_xy(x_idx, y_idx)
+                heuristic_distance = float(np.linalg.norm(goal_xy - center_xy))
+                tie_breaker = abs(int(x_idx) - int(goal_lane_x))
+                candidate = (float(global_distance), float(local_reach_distance), heuristic_distance, tie_breaker, x_idx, y_idx)
+
+                on_boundary = (x_idx == x_min or x_idx == x_max or y_idx == y_min or y_idx == y_max)
+                if on_boundary:
+                    if best_boundary_candidate is None or candidate < best_boundary_candidate:
+                        best_boundary_candidate = candidate
+                else:
+                    if best_inner_candidate is None or candidate < best_inner_candidate:
+                        best_inner_candidate = candidate
+
+        if best_boundary_candidate is not None:
+            _, _, _, _, target_x_idx, target_y_idx = best_boundary_candidate
+            return int(target_x_idx), int(target_y_idx)
+
+        if best_inner_candidate is not None:
+            _, _, _, _, target_x_idx, target_y_idx = best_inner_candidate
+            return int(target_x_idx), int(target_y_idx)
+
+        return None
+
+    def _invalidate_local_target_cache(self, agent_idx):
+        if self.local_targets is not None:
+            self.local_targets[agent_idx] = None
+        if self.local_target_ages is not None:
+            self.local_target_ages[agent_idx] = 0
+        if self.local_target_fields is not None:
+            self.local_target_fields[agent_idx] = None
+        if self.local_target_windows is not None:
+            self.local_target_windows[agent_idx] = None
+        if self.local_last_anchor_cells is not None:
+            self.local_last_anchor_cells[agent_idx] = None
+        if self.local_last_positions is not None:
+            self.local_last_positions[agent_idx] = None
+        if self.local_last_guidance_values is not None:
+            self.local_last_guidance_values[agent_idx] = None
+
+    def _is_local_target_valid(self, agent_idx, curr_x_idx, curr_y_idx, x_min, x_max, y_min, y_max):
+        if self.local_targets is None or self.local_target_ages is None:
+            return False
+        target = self.local_targets[agent_idx]
+        if target is None:
+            return False
+        if self.local_target_ages[agent_idx] >= self.local_target_hold_steps:
+            return False
+
+        target_x_idx, target_y_idx = int(target[0]), int(target[1])
+        if not (0 <= target_x_idx < self._x_cells and 0 <= target_y_idx < self._y_cells):
+            return False
+        if self.obstacle_map[target_x_idx, target_y_idx] != 0:
+            return False
+        if not (x_min <= target_x_idx <= x_max and y_min <= target_y_idx <= y_max):
+            return False
+
+        if abs(target_x_idx - curr_x_idx) + abs(target_y_idx - curr_y_idx) <= self.local_target_reached_cells:
+            return False
+
+        return True
+
+    def _refresh_local_target(self, agent_idx, x_min, x_max, y_min, y_max, local_reach_field, goal_xy, goal_lane_x, guidance_field):
+        target = self._select_local_target_cell(
+            local_reach_field=local_reach_field,
+            x_min=x_min,
+            x_max=x_max,
+            y_min=y_min,
+            y_max=y_max,
+            goal_xy=goal_xy,
+            goal_lane_x=goal_lane_x,
+            guidance_field=guidance_field,
+        )
+        if target is None:
+            self._invalidate_local_target_cache(agent_idx)
+            return None
+        self.local_targets[agent_idx] = target
+        self.local_target_ages[agent_idx] = 0
+        self.local_target_fields[agent_idx] = None
+        self.local_target_windows[agent_idx] = None
+        if self.local_last_anchor_cells is not None:
+            self.local_last_anchor_cells[agent_idx] = None
+        if self.local_last_positions is not None:
+            self.local_last_positions[agent_idx] = None
+        if self.local_last_guidance_values is not None:
+            self.local_last_guidance_values[agent_idx] = None
+        return target
+
+    def _compute_local_guidance_distance(self, pos, agent_idx=0):
         if self.free_cell_centers is None or self.free_cells is None or len(self.free_cells) == 0:
-            return float(np.linalg.norm(self.end_point[:2] - pos[:2]) + abs(self.end_point[2] - pos[2]))
+            goal = self.goals[agent_idx] if self.goals is not None else self.end_point
+            return float(np.linalg.norm(goal[:2] - pos[:2]) + abs(goal[2] - pos[2]))
 
         curr_x_idx, curr_y_idx = self._nearest_valid_guidance_cell(pos)
+        if self.local_last_anchor_cells is not None:
+            last_anchor = self.local_last_anchor_cells[agent_idx]
+            last_pos = self.local_last_positions[agent_idx]
+            last_value = self.local_last_guidance_values[agent_idx]
+            if (
+                last_value is not None
+                and last_pos is not None
+                and np.allclose(last_pos, pos, atol=1e-6)
+                and last_anchor is not None
+                and int(last_anchor[0]) == int(curr_x_idx)
+                and int(last_anchor[1]) == int(curr_y_idx)
+            ):
+                return float(last_value)
 
         x_cells, y_cells = self.obstacle_map.shape
         radius = self.local_guidance_window_cells
@@ -351,44 +617,112 @@ class Scenario_o_skill_hybrid(Scenario_o_base):
         x_max = min(x_cells - 1, int(curr_x_idx) + radius)
         y_min = max(0, int(curr_y_idx) - radius)
         y_max = min(y_cells - 1, int(curr_y_idx) + radius)
+        local_window = (x_min, x_max, y_min, y_max)
 
-        goal_dir = self.end_point[:2] - pos[:2]
-        goal_norm = np.linalg.norm(goal_dir)
+        goal = self.goals[agent_idx] if self.goals is not None else self.end_point
+        goal_norm = np.linalg.norm(goal[:2] - pos[:2])
         if goal_norm < 1e-6:
-            return float(abs(self.end_point[2] - pos[2]))
-        goal_dir = goal_dir / goal_norm
+            return float(abs(goal[2] - pos[2]))
 
-        candidate_indices = []
-        candidate_scores = []
-        for idx, (x_idx, y_idx) in enumerate(self.free_cells):
-            if not (x_min <= x_idx <= x_max and y_min <= y_idx <= y_max):
-                continue
-            disp = self.free_cell_centers[idx] - pos[:2]
-            progress = float(np.dot(disp, goal_dir))
-            if progress <= 0.0:
-                continue
-            boundary_bonus = 1.0 if (
-                x_idx == x_min or x_idx == x_max or y_idx == y_min or y_idx == y_max
-            ) else 0.0
-            candidate_indices.append(idx)
-            candidate_scores.append(progress + 0.25 * boundary_bonus)
-
-        if not candidate_indices:
-            return self.get_global_guidance_distance(pos)
-
-        target_idx = candidate_indices[int(np.argmax(candidate_scores))]
-        target_x_idx, target_y_idx = self.free_cells[target_idx]
+        if self.agent_goal_fields is not None:
+            guidance_field = self.agent_goal_fields[agent_idx]
+        else:
+            guidance_field = self.guidance_distance_field
+        goal_xy = goal[:2]
+        goal_lane_x = self._position_to_grid_cell(goal)[0]
 
         local_obst_map = self.obstacle_map[x_min:x_max + 1, y_min:y_max + 1]
-        local_field = self._compute_guidance_distance_field(
-            obst_map=local_obst_map,
-            goal_x_idx=int(target_x_idx) - x_min,
-            goal_y_idx=int(target_y_idx) - y_min,
+        local_target_valid = self._is_local_target_valid(
+            agent_idx=agent_idx,
+            curr_x_idx=curr_x_idx,
+            curr_y_idx=curr_y_idx,
+            x_min=x_min,
+            x_max=x_max,
+            y_min=y_min,
+            y_max=y_max,
         )
 
-        return self._continuous_guidance_distance(
-            pos=pos, distance_field=local_field, x_min=x_min, y_min=y_min, candidate_radius=1
+        if not local_target_valid:
+            local_reach_field = self._compute_guidance_distance_field(
+                obst_map=local_obst_map,
+                goal_x_idx=curr_x_idx - x_min,
+                goal_y_idx=curr_y_idx - y_min,
+            )
+            target_cell = self._refresh_local_target(
+                agent_idx=agent_idx,
+                x_min=x_min,
+                x_max=x_max,
+                y_min=y_min,
+                y_max=y_max,
+                local_reach_field=local_reach_field,
+                goal_xy=goal_xy,
+                goal_lane_x=goal_lane_x,
+                guidance_field=guidance_field,
+            )
+        else:
+            target_cell = self.local_targets[agent_idx]
+
+        if target_cell is None:
+            return self.get_global_guidance_distance(pos, agent_idx=agent_idx)
+
+        target_x_idx, target_y_idx = int(target_cell[0]), int(target_cell[1])
+        local_field = self.local_target_fields[agent_idx]
+        cached_window = self.local_target_windows[agent_idx]
+        if local_field is None or cached_window != local_window:
+            local_field = self._compute_guidance_distance_field(
+                obst_map=local_obst_map,
+                goal_x_idx=target_x_idx - x_min,
+                goal_y_idx=target_y_idx - y_min,
+            )
+            self.local_target_fields[agent_idx] = local_field
+            self.local_target_windows[agent_idx] = local_window
+        anchor_local_x = curr_x_idx - x_min
+        anchor_local_y = curr_y_idx - y_min
+        if not np.isfinite(local_field[anchor_local_x, anchor_local_y]):
+            local_reach_field = self._compute_guidance_distance_field(
+                obst_map=local_obst_map,
+                goal_x_idx=curr_x_idx - x_min,
+                goal_y_idx=curr_y_idx - y_min,
+            )
+            target_cell = self._refresh_local_target(
+                agent_idx=agent_idx,
+                x_min=x_min,
+                x_max=x_max,
+                y_min=y_min,
+                y_max=y_max,
+                local_reach_field=local_reach_field,
+                goal_xy=goal_xy,
+                goal_lane_x=goal_lane_x,
+                guidance_field=guidance_field,
+            )
+            if target_cell is None:
+                return self.get_global_guidance_distance(pos, agent_idx=agent_idx)
+            target_x_idx, target_y_idx = int(target_cell[0]), int(target_cell[1])
+            local_field = self._compute_guidance_distance_field(
+                obst_map=local_obst_map,
+                goal_x_idx=target_x_idx - x_min,
+                goal_y_idx=target_y_idx - y_min,
+            )
+            self.local_target_fields[agent_idx] = local_field
+            self.local_target_windows[agent_idx] = local_window
+
+        local_distance = self._continuous_guidance_distance(
+            pos=pos,
+            distance_field=local_field,
+            x_min=x_min,
+            y_min=y_min,
+            candidate_radius=1,
+            anchor_cell=(curr_x_idx, curr_y_idx),
+            goal_z=goal[2],
         )
+        target_suffix = float(guidance_field[target_x_idx, target_y_idx])
+        guidance_value = float(local_distance + target_suffix)
+        if self.local_last_anchor_cells is not None:
+            self.local_last_anchor_cells[agent_idx] = (int(curr_x_idx), int(curr_y_idx))
+            self.local_last_positions[agent_idx] = np.array(pos, copy=True)
+            self.local_last_guidance_values[agent_idx] = guidance_value
+        return guidance_value
+
 
     def _build_gate_box_items(self, obst_map, cell_centers, x_cells, gate_travel_rows, grid_size=1.0):
         gate_items = []
@@ -504,7 +838,7 @@ class Scenario_o_skill_hybrid(Scenario_o_base):
                 self.gate_travel_rows = gate_travel_rows
                 break
         else:
-            raise RuntimeError("Failed to generate a traversable o_skill_hybrid map")
+            raise RuntimeError("Failed to generate a traversable skill hybrid map")
 
         gate_grid_rows = {self._grid_row(y_cells, gate_travel_row) for gate_travel_row in gate_travel_rows}
         obstacle_items = []
@@ -530,19 +864,37 @@ class Scenario_o_skill_hybrid(Scenario_o_base):
         return obst_map, obstacle_items, cell_centers
 
     def step(self):
+        if self.guidance_type == "local_bfs" and self.local_target_ages is not None and self.local_targets is not None:
+            for idx, target in enumerate(self.local_targets):
+                if target is not None:
+                    self.local_target_ages[idx] += 1
+                if self.local_last_positions is not None:
+                    self.local_last_positions[idx] = None
+                    self.local_last_guidance_values[idx] = None
         return
 
-    def get_global_guidance_distance(self, pos):
+    def get_global_guidance_distance(self, pos, agent_idx=0):
+        goal = self.goals[agent_idx] if self.goals is not None else self.end_point
         if self.free_cell_centers is None or self.free_cell_guidance_distances is None:
-            return float(np.linalg.norm(self.end_point[:2] - pos[:2]) + abs(self.end_point[2] - pos[2]))
-        return self._continuous_guidance_distance(pos=pos, distance_field=self.guidance_distance_field, candidate_radius=1)
+            return float(np.linalg.norm(goal[:2] - pos[:2]) + abs(goal[2] - pos[2]))
+        if self.agent_goal_fields is not None:
+            guidance_field = self.agent_goal_fields[agent_idx]
+        else:
+            guidance_field = self.guidance_distance_field
+        return self._continuous_guidance_distance(
+            pos=pos,
+            distance_field=guidance_field,
+            candidate_radius=1,
+            goal_z=goal[2],
+        )
 
-    def get_guidance_distance(self, pos):
+    def get_guidance_distance(self, pos, agent_idx=0):
         if self.guidance_type == "global_bfs":
-            return self.get_global_guidance_distance(pos)
+            return self.get_global_guidance_distance(pos, agent_idx=agent_idx)
         if self.guidance_type == "local_bfs":
-            return self._compute_local_guidance_distance(pos)
-        return float(np.linalg.norm(self.end_point - pos))
+            return self._compute_local_guidance_distance(pos, agent_idx=agent_idx)
+        goal = self.goals[agent_idx] if self.goals is not None else self.end_point
+        return float(np.linalg.norm(goal - pos))
 
     def reset(self, obst_map=None, cell_centers=None):
         self.obstacle_map = obst_map
@@ -570,6 +922,14 @@ class Scenario_o_skill_hybrid(Scenario_o_base):
         self.guidance_distance_field = self._compute_guidance_distance_field(
             obst_map=self.obstacle_map, goal_x_idx=goal_lane_x, goal_y_idx=0
         )
+        self._build_nearest_valid_guidance_cells()
+        self.local_targets = [None for _ in range(self.num_agents)]
+        self.local_target_ages = np.zeros(self.num_agents, dtype=np.int32)
+        self.local_target_fields = [None for _ in range(self.num_agents)]
+        self.local_target_windows = [None for _ in range(self.num_agents)]
+        self.local_last_anchor_cells = [None for _ in range(self.num_agents)]
+        self.local_last_positions = [None for _ in range(self.num_agents)]
+        self.local_last_guidance_values = [None for _ in range(self.num_agents)]
         for idx, (x_idx, y_idx) in enumerate(free_cells):
             cell_center = self._center_from_cell(
                 cell_centers=self.cell_centers, x_idx=int(x_idx), y_idx=int(y_idx), x_cells=x_cells, z_value=z_value
@@ -578,5 +938,18 @@ class Scenario_o_skill_hybrid(Scenario_o_base):
             self.free_cell_guidance_distances[idx] = self.guidance_distance_field[int(x_idx), int(y_idx)]
 
         self.update_formation_and_relate_param()
-        self.spawn_points = np.array([copy.deepcopy(self.start_point) for _ in range(self.num_agents)])
-        self.goals = np.array([copy.deepcopy(self.end_point) for _ in range(self.num_agents)])
+        self.spawn_points = self._build_multi_agent_spawn_points(x_cells=x_cells, y_cells=y_cells, z_value=z_value)
+        self.goals, self.agent_goal_fields = self._build_goals_and_guidance_fields(
+            x_cells=x_cells,
+            y_cells=y_cells,
+            z_value=z_value,
+        )
+
+
+class Scenario_o_skill_hybrid_same_goal(Scenario_o_skill_hybrid):
+    pass
+
+
+class Scenario_o_skill_hybrid_diff_goal(Scenario_o_skill_hybrid):
+    def _use_shared_goal(self):
+        return False

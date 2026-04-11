@@ -23,15 +23,25 @@ from gym_art.quadrotor_multi.scenarios.obstacles.o_static_same_goal import Scena
 from gym_art.quadrotor_multi.scenarios.obstacles.o_dynamic_same_goal import Scenario_o_dynamic_same_goal
 from gym_art.quadrotor_multi.scenarios.obstacles.o_swap_goals import Scenario_o_swap_goals
 from gym_art.quadrotor_multi.scenarios.obstacles.o_ep_rand_bezier import Scenario_o_ep_rand_bezier
-from gym_art.quadrotor_multi.scenarios.obstacles.o_skill_hybrid import Scenario_o_skill_hybrid
+from gym_art.quadrotor_multi.scenarios.obstacles.o_skill_hybrid import (
+    Scenario_o_skill_hybrid_same_goal,
+    Scenario_o_skill_hybrid_diff_goal,
+)
 
 # Test Scenarios
 from gym_art.quadrotor_multi.scenarios.test.o_test import Scenario_o_test
 
 
+def _resolve_legacy_quads_mode(quads_mode, num_agents):
+    if quads_mode != 'o_skill_hybrid':
+        return quads_mode
+    return 'o_skill_hybrid_same_goal' if num_agents == 1 else 'o_skill_hybrid_diff_goal'
+
+
 def create_scenario(quads_mode, envs, num_agents, room_dims):
-    cls = eval('Scenario_' + quads_mode)
-    scenario = cls(quads_mode, envs, num_agents, room_dims)
+    resolved_mode = _resolve_legacy_quads_mode(quads_mode, num_agents)
+    cls = eval('Scenario_' + resolved_mode)
+    scenario = cls(resolved_mode, envs, num_agents, room_dims)
     return scenario
 
 

@@ -332,12 +332,15 @@ class QuadrotorEnvMulti(gym.Env):
     def init_scene_multi(self):
         models = tuple(e.dynamics.model for e in self.envs)
         for i in range(len(self.quads_view_mode)):
+            view_mode = self.quads_view_mode[i]
+            trace_len = 200 if view_mode in ('topdown', 'topdownfollow') else 25
+            trace_stride = 3 if view_mode in ('topdown', 'topdownfollow') else 1
             self.scenes.append(Quadrotor3DSceneMulti(
                 models=models,
-                w=600, h=480, resizable=True, viewpoint=self.quads_view_mode[i],
+                w=600, h=480, resizable=True, viewpoint=view_mode,
                 room_dims=self.room_dims, num_agents=self.num_agents,
                 render_speed=self.render_speed, formation_size=self.quads_formation_size, obstacles=self.obstacles,
-                vis_vel_arrows=False, vis_acc_arrows=True, viz_traces=25, viz_trace_nth_step=1,
+                vis_vel_arrows=False, vis_acc_arrows=True, viz_traces=trace_len, viz_trace_nth_step=trace_stride,
                 num_obstacles=self.num_obstacles, scene_index=i
             ))
 
@@ -411,7 +414,7 @@ class QuadrotorEnvMulti(gym.Env):
         self.reached_goal = [False for _ in range(len(self.envs))]
         if getattr(self.scenario, "guidance_type", "none") != "none" and hasattr(self.scenario, "get_guidance_distance"):
             self.prev_guidance_distances = np.array(
-                [self.scenario.get_guidance_distance(self.pos[i, :]) for i in range(len(self.envs))], dtype=np.float32
+                [self.scenario.get_guidance_distance(self.pos[i, :], agent_idx=i) for i in range(len(self.envs))], dtype=np.float32
             )
         else:
             self.prev_guidance_distances = None
@@ -548,10 +551,14 @@ class QuadrotorEnvMulti(gym.Env):
             self.collisions_ceiling_per_episode += len(ceiling_crash_list)
 
         # Reward & Info
+        curr_guidance_distances = None
+        if self.prev_guidance_distances is not None:
+            curr_guidance_distances = np.zeros(self.num_agents, dtype=np.float32)
         for i in range(self.num_agents):
             true_goal_distance = float(np.linalg.norm(self.scenario.goals[i] - self.pos[i, :]))
             if self.prev_guidance_distances is not None:
-                curr_guidance_distance = self.scenario.get_guidance_distance(self.pos[i, :])
+                curr_guidance_distance = self.scenario.get_guidance_distance(self.pos[i, :], agent_idx=i)
+                curr_guidance_distances[i] = curr_guidance_distance
                 # Progress shaping already scales with the environment step through state transitions,
                 # so we keep it as a pure potential difference instead of multiplying by dt again.
                 guidance_progress_reward = self.rew_coeff["pos"] * (
@@ -635,9 +642,13 @@ class QuadrotorEnvMulti(gym.Env):
             self.vel[i, :] = self.envs[i].dynamics.vel
 
         if self.prev_guidance_distances is not None:
-            self.prev_guidance_distances = np.array(
-                [self.scenario.get_guidance_distance(self.pos[i, :]) for i in range(self.num_agents)], dtype=np.float32
-            )
+            if self_state_update_flag:
+                self.prev_guidance_distances = np.array(
+                    [self.scenario.get_guidance_distance(self.pos[i, :], agent_idx=i) for i in range(self.num_agents)],
+                    dtype=np.float32,
+                )
+            else:
+                self.prev_guidance_distances = curr_guidance_distances
 
         if self_state_update_flag:
             obs = [e.state_vector(e) for e in self.envs]

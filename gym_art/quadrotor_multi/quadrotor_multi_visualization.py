@@ -189,12 +189,53 @@ class Quadrotor3DSceneMulti:
         self.formation_size = formation_size
         self.vis_vel_arrows = vis_vel_arrows
         self.vis_acc_arrows = vis_acc_arrows
-        self.viz_traces = 50
+        self.viz_traces = viz_traces
         self.viz_trace_nth_step = viz_trace_nth_step
         self.vector_array = [[] for _ in range(num_agents)]
         self.store_path_every_n = 1
         self.store_path_count = 0
         self.path_store = [[] for _ in range(num_agents)]
+        self.path_line_transforms = [[] for _ in range(num_agents)]
+
+    def _draw_path_lines(self):
+        return self.viewpoint in ('topdown', 'topdownfollow')
+
+    def _path_rgba(self, agent_idx, alpha=1.0):
+        return QUAD_COLOR[agent_idx % len(QUAD_COLOR)] + (alpha,)
+
+    def _segment_transform(self, start, end, radius):
+        import gym_art.quadrotor_multi.rendering3d as r3d
+
+        segment = end - start
+        segment_len = np.linalg.norm(segment)
+        if segment_len < 1e-6:
+            return None
+
+        z_axis = segment / segment_len
+        ref_axis = np.array([0.0, 0.0, 1.0])
+        if abs(np.dot(z_axis, ref_axis)) > 0.95:
+            ref_axis = np.array([0.0, 1.0, 0.0])
+
+        x_axis, x_norm = normalize(cross(ref_axis, z_axis))
+        if x_norm < 1e-6:
+            return None
+        y_axis = cross(z_axis, x_axis)
+        y_axis, _ = normalize(y_axis)
+
+        rotation = np.column_stack((x_axis, y_axis, z_axis))
+        transform = r3d.trans_and_rot(start, rotation)
+        stretch = np.diag([radius, radius, segment_len, 1.0])
+        return transform @ stretch
+
+    def _clear_path_visuals(self):
+        import gym_art.quadrotor_multi.rendering3d as r3d
+
+        hidden = (0.0, 0.0, 0.0, 0.0)
+        for agent_idx in range(self.num_agents):
+            for transform in self.path_transforms[agent_idx]:
+                transform.set_transform_and_color(r3d.translate([0.0, 0.0, -1000.0]), hidden)
+            for transform in self.path_line_transforms[agent_idx]:
+                transform.set_transform_and_color(r3d.translate([0.0, 0.0, -1000.0]), hidden)
 
     def update_goal_diameter(self):
         if self.quad_arm is not None:
@@ -229,6 +270,7 @@ class Quadrotor3DSceneMulti:
         self.quad_transforms, self.shadow_transforms, self.goal_transforms, self.collision_transforms = [], [], [], []
         self.obstacle_transforms, self.vec_cyl_transforms, self.vec_cone_transforms = [], [], []
         self.path_transforms = [[] for _ in range(self.num_agents)]
+        self.path_line_transforms = [[] for _ in range(self.num_agents)]
 
         shadow_circle = r3d.circle(0.75 * self.diameter, 32)
         collision_sphere = r3d.sphere(0.75 * self.diameter, 32)
@@ -236,6 +278,7 @@ class Quadrotor3DSceneMulti:
         arrow_cylinder = r3d.cylinder(0.005, 0.12, 16)
         arrow_cone = r3d.cone(0.01, 0.04, 16)
         path_sphere = r3d.sphere(0.15 * self.diameter, 16)
+        path_segment = r3d.cylinder(1.0, 1.0, 12)
 
         for i, model in enumerate(self.models):
             if model is not None:
@@ -269,6 +312,8 @@ class Quadrotor3DSceneMulti:
                 color = QUAD_COLOR[i % len(QUAD_COLOR)] + (1.0,)
                 for j in range(self.viz_traces):
                     self.path_transforms[i].append(r3d.transform_and_color(np.eye(4), color, path_sphere))
+                for j in range(max(0, self.viz_traces - 1)):
+                    self.path_line_transforms[i].append(r3d.transform_and_color(np.eye(4), color, path_segment))
 
         # TODO make floor size or walls to indicate world_box
         floor = r3d.ProceduralTexture(2, (0.85, 0.95),
@@ -283,6 +328,8 @@ class Quadrotor3DSceneMulti:
         bodies.extend(self.quad_transforms)
         bodies.extend(self.vec_cyl_transforms)
         bodies.extend(self.vec_cone_transforms)
+        for path_lines in self.path_line_transforms:
+            bodies.extend(path_lines)
         for path in self.path_transforms:
             bodies.extend(path)
         # visualize walls of the room if True
@@ -310,6 +357,7 @@ class Quadrotor3DSceneMulti:
         batch = r3d.Batch()
         world.build(batch)
         self.scene.batches.extend([batch])
+        self._clear_path_visuals()
 
     @staticmethod
     def _get_obstacle_signature(obstacles):
@@ -404,6 +452,9 @@ class Quadrotor3DSceneMulti:
         self._sync_obstacle_geometry(obstacles)
         self.vector_array = [[] for _ in range(self.num_agents)]
         self.path_store = [[] for _ in range(self.num_agents)]
+        self.store_path_count = 0
+        if self.scene:
+            self._clear_path_visuals()
 
         if self.viewpoint == 'global':
             self.chase_cam.reset(
@@ -457,13 +508,39 @@ class Quadrotor3DSceneMulti:
                     if len(self.path_store[i]) >= self.viz_traces:
                         self.path_store[i].pop(0)
 
-                    self.path_store[i].append(translation)
-                    color_rgba = QUAD_COLOR[i % len(QUAD_COLOR)] + (1.0,)
+                    self.path_store[i].append(np.array(dyn.pos, copy=True))
+                    color_rgba = self._path_rgba(i, alpha=1.0)
                     path_storage_length = len(self.path_store[i])
                     for k in range(path_storage_length):
                         scale = k / path_storage_length + 0.01
-                        transformation = self.path_store[i][k] @ r3d.scale(scale)
+                        transformation = r3d.translate(self.path_store[i][k]) @ r3d.scale(scale)
                         self.path_transforms[i][k].set_transform_and_color(transformation, color_rgba)
+                    for k in range(path_storage_length, self.viz_traces):
+                        self.path_transforms[i][k].set_transform_and_color(
+                            r3d.translate([0.0, 0.0, -1000.0]), (0.0, 0.0, 0.0, 0.0)
+                        )
+
+                    line_alpha = 0.95 if self._draw_path_lines() else 0.0
+                    line_rgba = self._path_rgba(i, alpha=line_alpha)
+                    segment_count = max(0, path_storage_length - 1)
+                    line_radius = max(0.24 * self.diameter, 0.03)
+                    for k in range(segment_count):
+                        segment_transform = self._segment_transform(
+                            self.path_store[i][k],
+                            self.path_store[i][k + 1],
+                            line_radius,
+                        )
+                        if segment_transform is None:
+                            segment_transform = r3d.translate([0.0, 0.0, -1000.0])
+                            self.path_line_transforms[i][k].set_transform_and_color(
+                                segment_transform, (0.0, 0.0, 0.0, 0.0)
+                            )
+                        else:
+                            self.path_line_transforms[i][k].set_transform_and_color(segment_transform, line_rgba)
+                    for k in range(segment_count, max(0, self.viz_traces - 1)):
+                        self.path_line_transforms[i][k].set_transform_and_color(
+                            r3d.translate([0.0, 0.0, -1000.0]), (0.0, 0.0, 0.0, 0.0)
+                        )
 
                 # shadow_pos = 0 + dyn.pos
                 # shadow_pos[2] = 0.001  # avoid z-fighting
